@@ -75,12 +75,20 @@ Rooms let multiple pairs play on the same server. Each room holds up to 2 player
 
 ```
 pong/
-├── pong.py       # the entire game — singleplayer, server, client, menus
-├── setup.sh      # optional: checks Python and curses availability
-└── README.md     # documentation
+├── pong.py              # entry point (just launches src/pong/core.py)
+├── pyproject.toml        # PyPI build config (pip install terminal-pong)
+├── LICENSE
+├── README.md
+├── setup.sh              # dependency checker
+├── description.txt       # short GitHub description
+└── src/
+    └── pong/
+        ├── __init__.py    # exports main()
+        ├── __main__.py    # python -m pong support
+        └── core.py        # the entire game
 ```
 
-Everything lives in one Python file. `setup.sh` is optional — it verifies dependencies and prints system info before launching.
+Everything lives in one Python file (`src/pong/core.py`). The root `pong.py` is a tiny launcher. `setup.sh` is optional.
 
 ## Requirements
 
