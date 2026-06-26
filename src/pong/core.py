@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import random
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 # ── Globals ─────────────────────────────────────────
@@ -33,6 +34,74 @@ ROOM_TEMPLATES = [
     "Classic", "Rally", "Speed", "Tournament", "Practice",
     "Sudden Death", "Challenge", "Arena", "Grand Slam", "Showdown",
 ]
+
+FILTERED_WORDS = [
+    "fuck", "shit", "ass", "bitch", "damn", "cunt", "dick", "piss",
+    "bastard", "cock", "nigger", "faggot", "slut", "whore",
+]
+
+def _filter_chat(text):
+    lowered = text.lower()
+    for word in FILTERED_WORDS:
+        idx = lowered.find(word)
+        if idx != -1:
+            censored = word[0] + "*" * (len(word) - 2) + word[-1]
+            text = text[:idx] + censored + text[idx + len(word):]
+            lowered = text.lower()
+    return text
+
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pong Server Dashboard</title>
+<style>
+ *{margin:0;padding:0;box-sizing:border-box}
+ body{font-family:system-ui,sans-serif;background:#111;color:#e0e0e0;padding:20px}
+ h1{color:#0ff;margin-bottom:4px}
+ .sub{color:#888;font-size:.9em;margin-bottom:20px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+ .card{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:16px}
+ .card h2{color:#0ff;font-size:1em;margin-bottom:12px}
+ table{width:100%;border-collapse:collapse}
+ th{text-align:left;color:#888;font-size:.8em;text-transform:uppercase;padding:4px 8px}
+ td{padding:6px 8px;border-top:1px solid #222}
+ .status-running{color:#0f0}
+ .status-full{color:#fa0}
+ .event{color:#aaa;font-size:.85em;padding:2px 0}
+ .event time{color:#666;margin-right:8px}
+ .footer{margin-top:24px;color:#555;font-size:.8em}
+</style></head><body>
+<h1>&#9616;&nbsp;Pong Server</h1>
+<div class="sub" id="info">Connecting...</div>
+<div class="grid">
+ <div class="card"><h2>&#9654;&nbsp;Active Rooms</h2><div id="rooms"><p style="color:#666">No rooms yet</p></div></div>
+ <div class="card"><h2>&#9881;&nbsp;Server Info</h2>
+  <table><tr><th>Property</th><th>Value</th></tr>
+   <tr><td>Status</td><td><span class="status-running">Running</span></td></tr>
+   <tr><td>Players</td><td id="players">0</td></tr>
+   <tr><td>Uptime</td><td id="uptime">--</td></tr>
+  </table></div>
+</div>
+<div class="card" style="margin-top:16px"><h2>&#9776;&nbsp;Event Log</h2><div id="events"><p style="color:#666">No events yet</p></div></div>
+<div class="footer" id="footer"></div>
+<script>
+async function load(){try{
+ const r=await fetch('/status'),d=await r.json();
+ document.getElementById('info').textContent=d.name+' | '+d.ip+':'+d.port+' | Web: http://'+d.ip+':'+d.web_port;
+ let rh=d.rooms.map(r=>{
+  let pn=r.player_names.join(', ')||'&mdash;';
+  return '<tr'+(r.full?' style="color:#fa0"':'')+'><td>'+(r.players>0?'&#9679; ':'')+r.name+'</td><td>'+r.players+'/2</td><td style="color:#aaa">'+pn+'</td></tr>'}).join('');
+ if(!rh)rh='<tr><td colspan="3" style="color:#666">No rooms yet</td></tr>';
+ document.getElementById('rooms').innerHTML='<table><tr><th>Room</th><th>Players</th><th>Names</th></tr>'+rh+'</table>';
+ document.getElementById('players').textContent=d.total_players;
+ let s=d.uptime,h=Math.floor(s/3600),m=Math.floor((s%3600)/60),s2=s%60;
+ document.getElementById('uptime').textContent=h+'h '+m+'m '+s2+'s';
+ let eh=d.events.map(e=>'<div class="event"><time>'+e.time+'</time>'+e.msg+'</div>').join('');
+ document.getElementById('events').innerHTML=eh||'<p style="color:#666">No events yet</p>';
+ document.getElementById('footer').textContent='Last updated: '+new Date().toLocaleTimeString();
+}catch(e){}setTimeout(load,2000)}load();
+</script></body></html>"""
 
 
 # ── Game State ──────────────────────────────────────
@@ -111,7 +180,7 @@ class GameState:
 
 
 # ── Render ──────────────────────────────────────────
-def render(stdscr, state, left_score, right_score, winner=None, side=None, info=None, chat_msgs=None, chat_input=None):
+def render(stdscr, state, left_score, right_score, winner=None, side=None, info=None, chat_msgs=None, chat_input=None, pname="", opponent=""):
     stdscr.clear()
     w = state["width"]
     h = state["height"]
@@ -169,10 +238,17 @@ def render(stdscr, state, left_score, right_score, winner=None, side=None, info=
             pass
 
     if side:
+        lbl = pname if pname else side
         try:
-            stdscr.addstr(h - 1, 2, f"You: {side}", curses.color_pair(3))
+            stdscr.addstr(0, 2, f"<{lbl}>", curses.color_pair(1))
         except:
             pass
+        if opponent:
+            try:
+                stdscr.addstr(0, w - len(opponent) - 4, f"<{opponent}>",
+                              curses.color_pair(2))
+            except:
+                pass
 
     if info:
         try:
@@ -265,17 +341,16 @@ def recv_msg(conn):
 
 
 # ── Discovery ─────────────────────────────────────
-def _discovery_broadcaster(udp_port, tcp_port, stop):
+def _discovery_broadcaster(udp_port, tcp_port, name, stop):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     s.settimeout(1)
-    hostname = socket.gethostname()
     while not stop.is_set():
         try:
             payload = json.dumps({
                 "type": "pong_announce",
                 "port": tcp_port,
-                "name": hostname,
+                "name": name,
             })
             s.sendto(payload.encode(), ("255.255.255.255", udp_port))
         except:
@@ -284,19 +359,79 @@ def _discovery_broadcaster(udp_port, tcp_port, stop):
     s.close()
 
 
-def start_discovery(tcp_port):
+def start_discovery(tcp_port, name="Pong Server"):
     stop = threading.Event()
     t = threading.Thread(target=_discovery_broadcaster,
-                         args=(DISCOVERY_PORT, tcp_port, stop), daemon=True)
+                         args=(DISCOVERY_PORT, tcp_port, name, stop), daemon=True)
     t.start()
     return stop
 
 
+# ── Web Dashboard ──────────────────────────────────
+def _start_web_dashboard(rooms, rooms_lock, events, events_lock, start_time,
+                         name, ip, port, web_port, stop_event):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/':
+                self._html()
+            elif self.path == '/status':
+                self._json()
+            else:
+                self.send_error(404)
+
+        def _html(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(DASHBOARD_HTML.encode())
+
+        def _json(self):
+            with rooms_lock:
+                rlist = [{"name": r.name, "players": len(r.players),
+                          "full": len(r.players) >= 2,
+                          "player_names": [p.name for p in r.players]}
+                         for r in rooms.values()]
+            with events_lock:
+                elist = [{"time": e[0], "msg": e[1]} for e in events[-30:]]
+            data = {
+                "name": name, "ip": ip, "port": port, "web_port": web_port,
+                "uptime": int(time.time() - start_time),
+                "total_players": sum(r["players"] for r in rlist),
+                "rooms": rlist, "events": elist,
+            }
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("", web_port), Handler)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    stop_event.wait()
+    httpd.shutdown()
+
+
 # ── Server ─────────────────────────────────────────
+def _make_server_sock(host, port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.settimeout(1)
+    try:
+        sock.bind((host, port))
+    except OSError:
+        return None
+    sock.listen(10)
+    return sock
+
+
 class Player:
-    def __init__(self, conn, addr):
+    def __init__(self, conn, addr, name=""):
         self.conn = conn
         self.addr = addr
+        self.name = name or f"Player_{addr[0].rsplit('.',1)[-1]}"
         self.side = None
 
     def send(self, msg):
@@ -320,7 +455,9 @@ class Room:
             side = "left" if len(self.players) == 0 else "right"
             player.side = side
             self.players.append(player)
-        player.send({"type": "assign", "player": side})
+        other = [p.name for p in self.players if p != player]
+        player.send({"type": "assign", "player": side, "name": player.name,
+                      "opponent": other[0] if other else ""})
         if self.chat_history:
             player.send({"type": "chat_history", "messages": self.chat_history[-100:]})
 
@@ -335,7 +472,9 @@ class Room:
             self.inputs[player.side] = set(msg.get("keys", []))
 
     def handle_chat(self, player, msg):
-        entry = {"from": player.side, "text": msg.get("text", "")}
+        lbl = player.name if player.name else player.side
+        text = _filter_chat(msg.get("text", ""))
+        entry = {"from": lbl, "text": text}
         self.chat_history.append(entry)
         if len(self.chat_history) > 100:
             self.chat_history.pop(0)
@@ -389,46 +528,59 @@ def get_local_ip():
     return ip
 
 
-def start_server(host, port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.settimeout(1)
-    try:
-        sock.bind((host, port))
-    except OSError as e:
-        print(f"Cannot bind to {host}:{port} — {e}")
-        sys.exit(1)
-    sock.listen(10)
-    rooms = {}
-    rooms_lock = threading.Lock()
-
-    ip = get_local_ip()
-    print(f"Pong server running on {host}:{port}")
-    print(f"Local IP: {ip}")
-    print(f"Join from another machine: python3 pong.py")
-    print("(then select Join Server and enter the IP)")
-    print()
-    print("Waiting for connections...")
-    print("Press Ctrl+C to stop the server.")
-    print()
-
-    stop_disc = start_discovery(port)
-
-    while True:
+def _run_server(sock, rooms, rooms_lock, events, events_lock, stop_event):
+    while not stop_event.is_set():
         try:
             conn, addr = sock.accept()
         except socket.timeout:
             continue
         except:
             break
-        threading.Thread(target=_handle_client, args=(conn, addr, rooms, rooms_lock), daemon=True).start()
+        threading.Thread(target=_handle_client,
+                         args=(conn, addr, rooms, rooms_lock, events, events_lock),
+                         daemon=True).start()
 
+
+def start_server(host, port):
+    sock = _make_server_sock(host, port)
+    if sock is None:
+        print(f"Cannot bind to {host}:{port}")
+        sys.exit(1)
+
+    ip = get_local_ip()
+    rooms = {}
+    rooms_lock = threading.Lock()
+    events = []
+    events_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    print(f"Pong server running on {host}:{port}")
+    print(f"Local IP: {ip}")
+    print()
+    print("Waiting for connections...")
+    print("Press Ctrl+C to stop the server.")
+    print()
+
+    stop_disc = start_discovery(port, socket.gethostname())
+    try:
+        _run_server(sock, rooms, rooms_lock, events, events_lock, stop_event)
+    except KeyboardInterrupt:
+        pass
+    stop_event.set()
     stop_disc.set()
+    sock.close()
 
 
-def _handle_client(conn, addr, rooms, rooms_lock):
+def _handle_client(conn, addr, rooms, rooms_lock, events, events_lock):
     player = None
     room = None
+
+    def log(msg):
+        t = time.strftime("%H:%M")
+        with events_lock:
+            events.append((t, msg))
+            if len(events) > 100:
+                events.pop(0)
 
     try:
         while True:
@@ -449,14 +601,17 @@ def _handle_client(conn, addr, rooms, rooms_lock):
                 with rooms_lock:
                     if room_name not in rooms:
                         rooms[room_name] = Room(room_name)
+                        log(f"Room '{room_name}' created")
                     room = rooms[room_name]
 
                 if len(room.players) >= 2:
                     send_msg(conn, {"type": "error", "msg": "Room is full"})
                     continue
 
-                player = Player(conn, addr)
+                pname = msg.get("player_name", "")
+                player = Player(conn, addr, pname)
                 room.add(player)
+                log(f"{player.name} ({player.side}) joined '{room_name}'")
                 break
 
             else:
@@ -474,7 +629,9 @@ def _handle_client(conn, addr, rooms, rooms_lock):
 
     finally:
         if room and player:
+            was = player.side
             room.remove(player)
+            log(f"{player.name} ({was}) left '{room.name}'")
         try:
             conn.close()
         except:
@@ -491,9 +648,11 @@ def game_loop(stdscr, sock):
     chat_log = []
     chat_mode = False
     chat_buf = ""
+    pname = ""
+    opponent = ""
 
     def pump():
-        nonlocal buf, state, winner, side, waiting, chat_log
+        nonlocal buf, state, winner, side, waiting, chat_log, pname, opponent
         while True:
             try:
                 data = sock.recv(4096)
@@ -513,6 +672,8 @@ def game_loop(stdscr, sock):
                 t = msg.get("type")
                 if t == "assign":
                     side = msg["player"]
+                    pname = msg.get("name", "")
+                    opponent = msg.get("opponent", "")
                 elif t == "state":
                     state = msg
                     winner = None
@@ -562,7 +723,8 @@ def game_loop(stdscr, sock):
                            state.get("left_score", 0),
                            state.get("right_score", 0),
                            winner, side, chat_msgs=chat_log,
-                           chat_input=chat_buf)
+                           chat_input=chat_buf,
+                           pname=pname, opponent=opponent)
                 time.sleep(TICK)
                 continue
 
@@ -595,7 +757,8 @@ def game_loop(stdscr, sock):
                        state.get("left_score", 0),
                        state.get("right_score", 0),
                        winner, side, info,
-                       chat_msgs=chat_log)
+                       chat_msgs=chat_log,
+                       pname=pname, opponent=opponent)
 
             if winner:
                 stdscr.nodelay(0)
@@ -616,6 +779,11 @@ def game_loop(stdscr, sock):
 
 
 def play_client(stdscr, host, port):
+    name = input_dialog(stdscr, " Your Name ", "Name:", default="")
+    if name is None:
+        return
+    name = name.strip() or f"Player_{random.randint(100, 999)}"
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(3)
     try:
@@ -644,7 +812,7 @@ def play_client(stdscr, host, port):
         return
 
     sock.setblocking(0)
-    send_msg(sock, {"type": "join", "room": room_name})
+    send_msg(sock, {"type": "join", "room": room_name, "player_name": name})
     game_loop(stdscr, sock)
     try:
         sock.close()
@@ -844,7 +1012,7 @@ def input_dialog(stdscr, title, prompt, default=""):
         key = stdscr.getch()
         if key in (ord('\n'),):
             curses.curs_set(0)
-            return value if value else None
+            return value
         elif key in (27,):
             curses.curs_set(0)
             return None
@@ -858,14 +1026,17 @@ def show_server_screen(stdscr):
     curses.curs_set(0)
     stdscr.nodelay(1)
     stdscr.clear()
-    h, w = stdscr.getmaxyx()
 
     port = DEFAULT_PORT
     port_str = str(port)
+    sname = socket.gethostname()
+    web_port = 8080
+    web_str = str(web_port)
+    editing = None  # "port", "name", "web", None
 
     while True:
-        stdscr.clear()
         h, w = stdscr.getmaxyx()
+        stdscr.clear()
 
         try:
             stdscr.addstr(1, w // 2 - 10, " Pong — Host Server ",
@@ -874,12 +1045,17 @@ def show_server_screen(stdscr):
             pass
 
         ip = get_local_ip()
+        label = sname if sname else "(unnamed)"
         lines = [
             f"IP:  {ip}",
             f"Port: {port_str}",
+            f"Name: {label}",
+            f"Web port: {web_str}",
             "",
             "Others join by selecting Join Server",
             f"and entering the IP above.",
+            "",
+            f"Web dashboard: http://{ip}:{web_str}",
         ]
         for i, line in enumerate(lines):
             try:
@@ -888,8 +1064,8 @@ def show_server_screen(stdscr):
                 pass
 
         try:
-            stdscr.addstr(h - 2, w // 2 - 18,
-                          "s  start server   p  edit port   q  back",
+            stdscr.addstr(h - 2, w // 2 - 22,
+                          "s  start   p  port   n  name   w  web port   q  back",
                           curses.color_pair(3))
         except:
             pass
@@ -900,40 +1076,63 @@ def show_server_screen(stdscr):
         if key == ord('q') or key == ord('Q'):
             return None
         elif key == ord('s') or key == ord('S'):
-            return port
+            return {"port": port, "name": sname if sname else "Pong Server",
+                    "web_port": web_port}
         elif key == ord('p') or key == ord('P'):
+            editing = "port"
+        elif key == ord('n') or key == ord('N'):
+            editing = "name"
+        elif key == ord('w') or key == ord('W'):
+            editing = "web"
+
+        if editing:
+            val = port_str if editing == "port" else (sname if editing == "name" else web_str)
+            title = {"port": "Game Port", "name": "Server Name", "web": "Web Dashboard Port"}[editing]
+            prompt = {"port": "Port:", "name": "Name:", "web": "Web Port:"}[editing]
             curses.curs_set(1)
-            val = port_str
             while True:
+                h, w = stdscr.getmaxyx()
                 stdscr.clear()
                 try:
-                    stdscr.addstr(1, w // 2 - 10, "Edit Port",
+                    stdscr.addstr(1, w // 2 - len(title) // 2, title,
                                   curses.color_pair(1) | curses.A_BOLD)
                 except:
                     pass
                 try:
-                    stdscr.addstr(3, w // 2 - 10, f"Port: {val}")
+                    stdscr.addstr(3, w // 2 - 10, f"{prompt} {val}")
                 except:
                     pass
                 try:
-                    stdscr.move(3, w // 2 - 10 + 6 + len(val))
+                    stdscr.move(3, w // 2 - 10 + len(prompt) + 1 + len(val))
+                except:
+                    pass
+                try:
+                    stdscr.addstr(h - 2, w // 2 - 20,
+                                  "enter confirm   esc back",
+                                  curses.color_pair(3))
                 except:
                     pass
                 stdscr.refresh()
                 k = stdscr.getch()
                 if k == ord('\n'):
-                    if val.isdigit() and 1 <= int(val) <= 65535:
+                    if editing == "port" and val.isdigit() and 1 <= int(val) <= 65535:
                         port_str = val
                         port = int(val)
+                    elif editing == "name":
+                        sname = val
+                    elif editing == "web" and val.isdigit() and 1 <= int(val) <= 65535:
+                        web_str = val
+                        web_port = int(val)
                     break
                 elif k in (27,):
                     break
                 elif k in (curses.KEY_BACKSPACE, 127, 8):
                     val = val[:-1]
-                elif 48 <= k <= 57:
+                elif 32 <= k <= 126:
                     val += chr(k)
             curses.curs_set(0)
             stdscr.nodelay(1)
+            editing = None
 
 
 def show_how_to_play(stdscr):
@@ -1102,16 +1301,171 @@ def server_browser(stdscr):
         time.sleep(0.1)
 
 
+# ── Server Management Screen ──────────────────────
+def server_management_screen(stdscr, config):
+    port = config["port"]
+    name = config.get("name", "Pong Server")
+    web_port = config.get("web_port", 8080)
+
+    sock = _make_server_sock("0.0.0.0", port)
+    if sock is None:
+        sh, sw = stdscr.getmaxyx()
+        stdscr.addstr(sh // 2, sw // 2 - 12, f"Cannot bind to port {port}")
+        stdscr.getch()
+        return
+
+    ip = get_local_ip()
+    rooms = {}
+    rooms_lock = threading.Lock()
+    events = []
+    events_lock = threading.Lock()
+    stop_event = threading.Event()
+    start_time = time.time()
+
+    stop_disc = start_discovery(port, name)
+
+    t = threading.Thread(target=_run_server,
+                         args=(sock, rooms, rooms_lock, events, events_lock, stop_event),
+                         daemon=True)
+    t.start()
+
+    threading.Thread(target=_start_web_dashboard,
+                     args=(rooms, rooms_lock, events, events_lock, start_time,
+                           name, ip, port, web_port, stop_event),
+                     daemon=True).start()
+
+    curses.curs_set(0)
+    stdscr.nodelay(1)
+    sel_room = 0
+
+    while not stop_event.is_set():
+        h, w = stdscr.getmaxyx()
+        stdscr.clear()
+
+        y = 1
+        title = f" Pong — Server: {name} "
+        try:
+            stdscr.addstr(y, w // 2 - len(title) // 2, title,
+                          curses.color_pair(1) | curses.A_BOLD)
+        except:
+            pass
+        y += 2
+
+        upt = int(time.time() - start_time)
+        info = (f"IP: {ip}:{port}   "
+                f"Web: http://{ip}:{web_port}   "
+                f"Uptime: {upt // 3600}h {(upt % 3600) // 60}m {upt % 60}s")
+        try:
+            stdscr.addstr(y, w // 2 - len(info) // 2, info, curses.color_pair(3))
+        except:
+            pass
+        y += 2
+
+        try:
+            stdscr.addstr(y, w // 2 - 15, "Active Rooms:", curses.A_BOLD)
+        except:
+            pass
+        y += 1
+
+        with rooms_lock:
+            rlist = list(rooms.items())
+
+        if not rlist:
+            try:
+                stdscr.addstr(y, w // 2 - 12, "(no rooms yet)", curses.color_pair(3))
+            except:
+                pass
+            y += 1
+            sel_room = 0
+        else:
+            sel_room = min(sel_room, len(rlist) - 1)
+            for idx, (rn, rm) in enumerate(rlist):
+                marker = " >" if idx == sel_room else "  "
+                players = len(rm.players)
+                pnames = ", ".join(p.name for p in rm.players)
+                status = f"{players}/2" + (" FULL" if players >= 2 else "")
+                pair = curses.color_pair(1) if idx == sel_room else curses.color_pair(3)
+                line = f"{marker}  {rn}  ({status})"
+                if pnames:
+                    line += f"  [{pnames}]"
+                try:
+                    stdscr.addstr(y, w // 2 - 15, line[:w - 2], pair)
+                except:
+                    pass
+                y += 1
+
+        y += 1
+        with events_lock:
+            recent = events[-max(0, h - y - 4):]
+
+        try:
+            stdscr.addstr(y, w // 2 - 15, "Recent Events:", curses.A_BOLD)
+        except:
+            pass
+        y += 1
+        for tstr, msg in recent[-max(0, h - y - 2):]:
+            line = f"  [{tstr}] {msg}"
+            try:
+                stdscr.addstr(y, w // 2 - 15, line[:w - 2], curses.color_pair(3))
+            except:
+                pass
+            y += 1
+
+        try:
+            stdscr.addstr(h - 2, w // 2 - 22,
+                          "j  join locally   r  rescan rooms   q  stop server",
+                          curses.color_pair(3))
+        except:
+            pass
+
+        try:
+            diag = _DIAG
+            if len(diag) >= w:
+                diag = "..." + diag[-(w - 3):]
+            stdscr.addstr(h - 1, w // 2 - len(diag) // 2, diag, curses.color_pair(3))
+        except:
+            pass
+
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key == ord('q') or key == ord('Q'):
+            break
+        elif key == ord('j') or key == ord('J'):
+            sock.setblocking(0)
+            try:
+                play_client(stdscr, "127.0.0.1", port)
+            except:
+                pass
+            sock.setblocking(0)
+            stdscr.nodelay(1)
+            curses.curs_set(0)
+        elif key == ord('r') or key == ord('R'):
+            pass
+        elif key == curses.KEY_UP:
+            if rlist:
+                sel_room = (sel_room - 1) % len(rlist)
+        elif key == curses.KEY_DOWN:
+            if rlist:
+                sel_room = (sel_room + 1) % len(rlist)
+        elif key == ord('\n') and rlist:
+            pass
+
+        time.sleep(0.1)
+
+    stop_event.set()
+    stop_disc.set()
+    sock.close()
+
+
 def multiplayer_submenu(stdscr):
     while True:
         choice = menu_loop(stdscr, " Multiplayer ", ["Host Server", "Join Server"])
 
         if choice == 0:
-            result = show_server_screen(stdscr)
-            if result is not None:
-                curses.endwin()
-                start_server("0.0.0.0", result)
-                return True
+            config = show_server_screen(stdscr)
+            if config is not None:
+                server_management_screen(stdscr, config)
 
         elif choice == 1:
             host = server_browser(stdscr)
