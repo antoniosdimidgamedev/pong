@@ -863,10 +863,13 @@ def main_menu(stdscr):
             break
 
 
-# ── Entry point ────────────────────────────────────
-if __name__ == "__main__":
+def main():
     os.environ.setdefault("TERM", "xterm-256color")
     try:
         curses.wrapper(main_menu)
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    main()
