@@ -25,7 +25,14 @@ PADDLE_WIDTH = 1
 BALL_SPEED = 1
 WIN_SCORE = 5
 DEFAULT_PORT = 9999
+DISCOVERY_PORT = 10000
+DISCOVERY_INTERVAL = 3
 TICK = 0.04
+
+ROOM_TEMPLATES = [
+    "Classic", "Rally", "Speed", "Tournament", "Practice",
+    "Sudden Death", "Challenge", "Arena", "Grand Slam", "Showdown",
+]
 
 
 # ── Game State ──────────────────────────────────────
@@ -104,7 +111,7 @@ class GameState:
 
 
 # ── Render ──────────────────────────────────────────
-def render(stdscr, state, left_score, right_score, winner=None, side=None, info=None):
+def render(stdscr, state, left_score, right_score, winner=None, side=None, info=None, chat_msgs=None, chat_input=None):
     stdscr.clear()
     w = state["width"]
     h = state["height"]
@@ -174,6 +181,29 @@ def render(stdscr, state, left_score, right_score, winner=None, side=None, info=
         except:
             pass
 
+    if chat_msgs:
+        y = h - 4
+        for frm, txt in chat_msgs[-4:]:
+            if y < 0:
+                break
+            try:
+                line = f"<{frm}> {txt}"
+                if len(line) >= w:
+                    line = line[:w - 1]
+                stdscr.addstr(y, 0, line, curses.color_pair(3))
+            except:
+                pass
+            y += 1
+
+    if chat_input is not None:
+        try:
+            line = f"/{chat_input}"
+            if len(line) >= w:
+                line = line[:w - 1]
+            stdscr.addstr(h - 1, 0, line, curses.color_pair(1))
+        except:
+            pass
+
     stdscr.refresh()
 
 
@@ -234,6 +264,34 @@ def recv_msg(conn):
         buf += c
 
 
+# ── Discovery ─────────────────────────────────────
+def _discovery_broadcaster(udp_port, tcp_port, stop):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.settimeout(1)
+    hostname = socket.gethostname()
+    while not stop.is_set():
+        try:
+            payload = json.dumps({
+                "type": "pong_announce",
+                "port": tcp_port,
+                "name": hostname,
+            })
+            s.sendto(payload.encode(), ("255.255.255.255", udp_port))
+        except:
+            pass
+        stop.wait(DISCOVERY_INTERVAL)
+    s.close()
+
+
+def start_discovery(tcp_port):
+    stop = threading.Event()
+    t = threading.Thread(target=_discovery_broadcaster,
+                         args=(DISCOVERY_PORT, tcp_port, stop), daemon=True)
+    t.start()
+    return stop
+
+
 # ── Server ─────────────────────────────────────────
 class Player:
     def __init__(self, conn, addr):
@@ -252,6 +310,7 @@ class Room:
         self.lock = threading.Lock()
         self.game = GameState()
         self.inputs = {"left": set(), "right": set()}
+        self.chat_history = []
         self.alive = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
@@ -262,6 +321,8 @@ class Room:
             player.side = side
             self.players.append(player)
         player.send({"type": "assign", "player": side})
+        if self.chat_history:
+            player.send({"type": "chat_history", "messages": self.chat_history[-100:]})
 
     def remove(self, player):
         with self.lock:
@@ -272,6 +333,16 @@ class Room:
     def handle_input(self, player, msg):
         with self.lock:
             self.inputs[player.side] = set(msg.get("keys", []))
+
+    def handle_chat(self, player, msg):
+        entry = {"from": player.side, "text": msg.get("text", "")}
+        self.chat_history.append(entry)
+        if len(self.chat_history) > 100:
+            self.chat_history.pop(0)
+        relay = {"type": "chat", "from": entry["from"], "text": entry["text"]}
+        with self.lock:
+            for p in self.players:
+                p.send(relay)
 
     def _loop(self):
         while self.alive:
@@ -339,6 +410,9 @@ def start_server(host, port):
     print()
     print("Waiting for connections...")
     print("Press Ctrl+C to stop the server.")
+    print()
+
+    stop_disc = start_discovery(port)
 
     while True:
         try:
@@ -348,6 +422,8 @@ def start_server(host, port):
         except:
             break
         threading.Thread(target=_handle_client, args=(conn, addr, rooms, rooms_lock), daemon=True).start()
+
+    stop_disc.set()
 
 
 def _handle_client(conn, addr, rooms, rooms_lock):
@@ -390,8 +466,11 @@ def _handle_client(conn, addr, rooms, rooms_lock):
             msg = recv_msg(conn)
             if msg is None:
                 return
-            if msg.get("type") == "input":
+            t = msg.get("type")
+            if t == "input":
                 room.handle_input(player, msg)
+            elif t == "chat":
+                room.handle_chat(player, msg)
 
     finally:
         if room and player:
@@ -409,9 +488,12 @@ def game_loop(stdscr, sock):
     winner = None
     waiting = True
     buf = ""
+    chat_log = []
+    chat_mode = False
+    chat_buf = ""
 
     def pump():
-        nonlocal buf, state, winner, side, waiting
+        nonlocal buf, state, winner, side, waiting, chat_log
         while True:
             try:
                 data = sock.recv(4096)
@@ -439,6 +521,17 @@ def game_loop(stdscr, sock):
                     state = msg
                     winner = msg.get("winner")
                     waiting = False
+                elif t == "chat_history":
+                    for entry in msg.get("messages", []):
+                        chat_log.append((entry.get("from", "?"), entry.get("text", "")))
+                    if len(chat_log) > 100:
+                        chat_log[:] = chat_log[-100:]
+                elif t == "chat":
+                    frm = msg.get("from", "?")
+                    txt = msg["text"]
+                    chat_log.append((frm, txt))
+                    if len(chat_log) > 100:
+                        chat_log.pop(0)
                 elif t == "error":
                     raise Exception(msg.get("msg", "Server error"))
 
@@ -448,6 +541,37 @@ def game_loop(stdscr, sock):
             pump()
 
             key = stdscr.getch()
+
+            if chat_mode:
+                if key == ord('\n'):
+                    if chat_buf.strip():
+                        send_msg(sock, {"type": "chat", "text": chat_buf})
+                    chat_buf = ""
+                    chat_mode = False
+                    stdscr.nodelay(1)
+                elif key in (27,):
+                    chat_buf = ""
+                    chat_mode = False
+                    stdscr.nodelay(1)
+                elif key in (curses.KEY_BACKSPACE, 127, 8):
+                    chat_buf = chat_buf[:-1]
+                elif 32 <= key <= 126:
+                    chat_buf += chr(key)
+                if state:
+                    render(stdscr, state,
+                           state.get("left_score", 0),
+                           state.get("right_score", 0),
+                           winner, side, chat_msgs=chat_log,
+                           chat_input=chat_buf)
+                time.sleep(TICK)
+                continue
+
+            if key == ord('/'):
+                chat_mode = True
+                chat_buf = "/"
+                stdscr.nodelay(0)
+                continue
+
             if key in (ord('q'), ord('Q')):
                 break
 
@@ -470,7 +594,8 @@ def game_loop(stdscr, sock):
                 render(stdscr, state,
                        state.get("left_score", 0),
                        state.get("right_score", 0),
-                       winner, side, info)
+                       winner, side, info,
+                       chat_msgs=chat_log)
 
             if winner:
                 stdscr.nodelay(0)
@@ -590,7 +715,9 @@ def show_room_selector(stdscr, host, rooms):
     stdscr.keypad(1)
 
     entries = [(r["name"], r["players"] >= 2) for r in rooms]
-    selected = 0
+    templates = ROOM_TEMPLATES[:]
+    total = len(entries) + len(templates) + 1
+    sel = 0
 
     while True:
         stdscr.clear()
@@ -604,23 +731,53 @@ def show_room_selector(stdscr, host, rooms):
             pass
 
         y = 3
+
+        try:
+            stdscr.addstr(y, w // 2 - 12, "Active rooms:",
+                          curses.color_pair(3))
+        except:
+            pass
+        y += 1
+
         for idx, (name, full) in enumerate(entries):
-            marker = " >" if idx == selected and not full else "  "
+            marker = " >" if sel == idx and not full else "  "
             status = "FULL" if full else "open"
-            pair = curses.color_pair(1) if idx == selected and not full else curses.color_pair(3)
+            pair = curses.color_pair(1) if sel == idx and not full else curses.color_pair(3)
             try:
                 stdscr.addstr(y, w // 2 - 12, f"{marker}  {name}  ({status})", pair)
             except:
                 pass
             y += 1
 
-        if y < h - 3:
-            marker = " >" if selected == len(entries) else "  "
+        y += 1
+        base = len(entries) + 1
+
+        try:
+            stdscr.addstr(y, w // 2 - 12, "Templates:",
+                          curses.color_pair(3))
+        except:
+            pass
+        y += 1
+
+        for idx, name in enumerate(templates):
+            i = base + idx
+            marker = " >" if sel == i else "  "
+            pair = curses.color_pair(1) if sel == i else curses.color_pair(3)
             try:
-                stdscr.addstr(y, w // 2 - 12, f"{marker}  [New Game]",
-                              curses.color_pair(1) if selected == len(entries) else curses.color_pair(3))
+                stdscr.addstr(y, w // 2 - 12, f"{marker}  {name}", pair)
             except:
                 pass
+            y += 1
+
+        y += 1
+        new_idx = base + len(templates)
+
+        marker = " >" if sel == new_idx else "  "
+        try:
+            stdscr.addstr(y, w // 2 - 12, f"{marker}  [New Game]",
+                          curses.color_pair(1) if sel == new_idx else curses.color_pair(3))
+        except:
+            pass
 
         try:
             stdscr.addstr(h - 2, w // 2 - 20,
@@ -635,15 +792,17 @@ def show_room_selector(stdscr, host, rooms):
         if key in (ord('q'), ord('Q'), 27):
             return None
         elif key == curses.KEY_UP:
-            selected = (selected - 1) % (len(entries) + 1)
+            sel = (sel - 1) % total
         elif key == curses.KEY_DOWN:
-            selected = (selected + 1) % (len(entries) + 1)
+            sel = (sel + 1) % total
         elif key in (ord('\n'), ord(' ')):
-            if selected < len(entries):
-                name, full = entries[selected]
+            if sel < len(entries):
+                name, full = entries[sel]
                 if full:
                     continue
                 return name
+            elif sel < base + len(templates):
+                return templates[sel - base]
             else:
                 return f"room_{random.randint(1000, 9999)}"
 
@@ -809,6 +968,140 @@ def show_how_to_play(stdscr):
     stdscr.getch()
 
 
+def server_browser(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(1)
+    discovered = []
+    lock = threading.Lock()
+
+    def listener():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.settimeout(1)
+        try:
+            s.bind(("", DISCOVERY_PORT))
+        except:
+            return
+        while True:
+            try:
+                data, addr = s.recvfrom(1024)
+                msg = json.loads(data.decode())
+                if msg.get("type") == "pong_announce":
+                    entry = (addr[0], msg.get("port", DEFAULT_PORT), msg.get("name", "?"))
+                    with lock:
+                        for e in discovered:
+                            if e[0] == entry[0] and e[1] == entry[1]:
+                                break
+                        else:
+                            discovered.append(entry)
+                            if len(discovered) > 50:
+                                discovered.pop(0)
+            except:
+                pass
+    t = threading.Thread(target=listener, daemon=True)
+    t.start()
+
+    sel = 0
+    last_count = -1
+
+    while True:
+        with lock:
+            count = len(discovered)
+
+        if count != last_count:
+            sel = min(sel, count)
+            last_count = count
+
+        h, w = stdscr.getmaxyx()
+        stdscr.clear()
+
+        title = " Server Browser "
+        try:
+            stdscr.addstr(1, w // 2 - len(title) // 2, title,
+                          curses.color_pair(1) | curses.A_BOLD)
+        except:
+            pass
+
+        try:
+            status = f" Scanning... ({count} server(s) found)" if count > 0 else " Scanning... (no servers yet)"
+            stdscr.addstr(3, w // 2 - 20, status, curses.color_pair(3))
+        except:
+            pass
+
+        y = 5
+        with lock:
+            for idx, (ip, p, name) in enumerate(discovered):
+                if y >= h - 4:
+                    break
+                marker = " >" if sel == idx else "  "
+                pair = curses.color_pair(1) if sel == idx else curses.color_pair(3)
+                try:
+                    stdscr.addstr(y, w // 2 - 20, f"{marker}  {ip}:{p}  ({name})", pair)
+                except:
+                    pass
+                y += 1
+
+        y += 1
+        man_idx = count
+        marker = " >" if sel == man_idx else "  "
+        try:
+            stdscr.addstr(y, w // 2 - 20, f"{marker}  [Enter IP Manually]",
+                          curses.color_pair(1) if sel == man_idx else curses.color_pair(3))
+        except:
+            pass
+
+        y += 1
+        back_idx = count + 1
+        marker = " >" if sel == back_idx else "  "
+        try:
+            stdscr.addstr(y, w // 2 - 20, f"{marker}  [Back]",
+                          curses.color_pair(1) if sel == back_idx else curses.color_pair(3))
+        except:
+            pass
+
+        try:
+            stdscr.addstr(h - 2, w // 2 - 20,
+                          "arrows  enter select  r rescan  q back",
+                          curses.color_pair(3))
+        except:
+            pass
+
+        try:
+            diag = _DIAG
+            if len(diag) >= w:
+                diag = "..." + diag[-(w - 3):]
+            stdscr.addstr(h - 1, w // 2 - len(diag) // 2, diag, curses.color_pair(3))
+        except:
+            pass
+
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (ord('q'), ord('Q'), 27):
+            return None
+        elif key == curses.KEY_UP:
+            sel = max(0, sel - 1)
+        elif key == curses.KEY_DOWN:
+            sel = min(count + 1, sel + 1)
+        elif key == ord('r') or key == ord('R'):
+            with lock:
+                discovered.clear()
+            sel = 0
+        elif key in (ord('\n'), ord(' ')):
+            if sel < count:
+                with lock:
+                    ip, p, _ = discovered[sel]
+                return ip, p
+            elif sel == count:
+                ip = input_dialog(stdscr, " Join Server ", "Server IP:", "")
+                if ip:
+                    return ip, DEFAULT_PORT
+            else:
+                return None
+
+        time.sleep(0.1)
+
+
 def multiplayer_submenu(stdscr):
     while True:
         choice = menu_loop(stdscr, " Multiplayer ", ["Host Server", "Join Server"])
@@ -821,10 +1114,9 @@ def multiplayer_submenu(stdscr):
                 return True
 
         elif choice == 1:
-            host = input_dialog(stdscr, " Join Server ",
-                                "Server IP:", "")
+            host = server_browser(stdscr)
             if host is not None:
-                play_client(stdscr, host, DEFAULT_PORT)
+                play_client(stdscr, host[0], host[1])
 
         else:
             break
