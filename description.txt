@@ -1,0 +1,1 @@
+Classic Pong in the terminal. Singleplayer on one keyboard and LAN multiplayer with rooms. No dependencies — just Python 3 and curses. Works on Linux, macOS, and Termux.
