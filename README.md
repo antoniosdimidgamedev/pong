@@ -1,25 +1,38 @@
 # Pong
 
-Classic Pong for the terminal. Singleplayer on one keyboard or multiplayer over LAN with room-based matchmaking. No dependencies beyond Python 3.6+ and curses. Runs on Linux, macOS, and Termux.
+Classic Pong for the terminal. Singleplayer on one keyboard or multiplayer over LAN with room-based matchmaking, in-game chat, a web dashboard, and automatic server discovery. No dependencies beyond Python 3.6+ and curses. Runs on Linux, macOS, and Termux.
 
 ## Features
 
 - **Singleplayer mode** — two players share one keyboard (W/S vs arrow keys)
-- **LAN multiplayer** — built-in TCP server with automatic IP detection
-- **Room system** — browse active games or create your own with a generated name
-- **Terminal UI** — full curses interface with menus, IP input, and a room selector
+- **LAN multiplayer** — built-in TCP server with automatic IP detection, UDP broadcast discovery, and a server browser
+- **Room templates** — pick from 10 preset room names (Classic, Rally, Speed, Tournament, Practice, Sudden Death, Challenge, Arena, Grand Slam, Showdown) or create a new one
+- **Web dashboard** — live HTTP dashboard showing server status, active rooms, player names, and recent events; viewable from any browser on the LAN
+- **Server management screen** — when hosting, a curses interface shows rooms, players, and live events; hosts can join their own games locally
+- **Custom player names** — prompted on join; displayed in-game, in chat, in the management screen, and in the web dashboard
+- **Custom server names** — configure a name before starting; broadcast in UDP discovery and shown in the server browser
+- **In-game chat** — press `/` to open chat input, type your message, press Enter to send, Esc to cancel
+- **Chat history** — last 100 messages stored server-side and sent to late-joining players
+- **Chat filter** — common profanity is automatically censored server-side before reaching other players
+- **Terminal UI** — full curses interface with menus, IP input, a room selector, and a server browser with auto-discovery
 - **Diagnostics** — OS, kernel, architecture, and Python version shown at the bottom of every menu
 - **Portable** — pure Python, no pip installs, works wherever Python and curses do
+- **PyPI package** — install with `pip install terminal-pong` and run with the `pong` command
 
 ## Quick start
 
 ```bash
-git clone https://github.com/YOUR_USER/pong.git
+git clone https://github.com/antoniosdimidgamedev/pong.git
 cd pong
 python3 pong.py
 ```
 
-Or download `pong.py` and run it directly — that is the entire game.
+Or install from PyPI and run from anywhere:
+
+```bash
+pip install terminal-pong
+pong
+```
 
 ## How to play
 
@@ -36,14 +49,18 @@ Use arrow keys to navigate, Enter to select, Q or Esc to go back.
 
 ### Controls
 
-| Player | Paddle up | Paddle down | Quit |
-|---|---|---|---|
-| Left (W/S) | `W` | `S` | `Q` |
-| Right (arrows) | `↑` | `↓` | `Q` |
+| Player | Paddle up | Paddle down | Chat | Quit |
+|---|---|---|---|---|
+| Left (W/S) | `W` | `S` | `/` | `Q` |
+| Right (arrows) | `↑` | `↓` | `/` | `Q` |
 
 ### Rules
 
-First to 5 points wins. The ball speeds up slightly to keep rallies interesting. After a point the ball resets to center and launches toward the player who was scored on.
+First to 5 points wins. After a point the ball resets to center and launches toward the player who was scored on.
+
+### Chat
+
+Press `/` to enter chat mode. The prompt appears at the bottom of the screen. Type your message and press Enter to send. Press Esc to cancel. Chat messages from both players are shown in the bottom few lines of the game screen. If you join a room with existing chat history, the last 100 messages are replayed to you.
 
 ## LAN multiplayer
 
@@ -53,23 +70,50 @@ No internet required. Works over any local network (Wi-Fi, Ethernet, mobile hots
 
 1. Run `python3 pong.py`
 2. Select **Play > Multiplayer > Host Server**
-3. (Optional) Press `p` to change the port — default is 9999
-4. Press `s` to start the server
-5. Share the displayed IP address with the other player
+3. Configure your server:
+   - `p` — change the game port (default 9999)
+   - `n` — set a custom server name (defaults to your hostname)
+   - `w` — set the web dashboard port (default 8080)
+4. Press `s` to start
+5. Share the displayed IP address, or let other players find your server via automatic discovery
 
-The server runs in the terminal and accepts connections until you press Ctrl+C.
+The management screen shows active rooms, connected players, and a live event log. From here you can:
+- Press `j` to join your own server as a local client — play on 127.0.0.1, then return to the management screen when the game ends
+- Press `q` to stop the server and go back to the menu
 
 ### Join
 
 1. Run `python3 pong.py`
 2. Select **Play > Multiplayer > Join Server**
-3. Enter the host's IP address
-4. A room browser appears — pick an open room or select **[New Game]** to create one
-5. The match starts automatically once both players are in the same room
+3. An auto-discovery screen scans the LAN for servers broadcasting on UDP port 10000
+4. Pick a detected server or select **[Enter IP Manually]** to type an address
+5. Enter your display name when prompted
+6. A room browser appears — pick an open room, a template name, or select **[New Game]** to create one
+7. The match starts automatically once both players are in the same room
 
 ### Rooms
 
-Rooms let multiple pairs play on the same server. Each room holds up to 2 players. When browsing, rooms show their player count (`0/2`, `1/2`) or `FULL`. Selecting **[New Game]** generates a random room name (e.g. `room_4821`).
+Rooms let multiple pairs play on the same server. Each room holds up to 2 players. When browsing, active rooms show their player count (`0/2`, `1/2`) or `FULL`. The room selector also shows 10 template names you can pick from to quickly start a themed game. Selecting **[New Game]** generates a random room name.
+
+### Server browser
+
+When joining, the server browser listens for UDP broadcast packets on port 10000. Any pong server on the LAN sends an announcement every 3 seconds containing its IP, port, and name. Detected servers appear in a list with live updates. Press `r` to rescan.
+
+## Web dashboard
+
+When hosting, pong starts a lightweight HTTP server that serves a live dashboard:
+
+```
+http://<server-ip>:8080
+```
+
+The dashboard shows:
+- Server name, IP, and game port
+- Uptime and total player count
+- A table of active rooms with player names
+- An event log with timestamps
+
+The page auto-refreshes every 2 seconds via a `/status` JSON endpoint. No external web server or dependencies needed — it is built into the game.
 
 ## Files
 
@@ -85,7 +129,7 @@ pong/
     └── pong/
         ├── __init__.py    # exports main()
         ├── __main__.py    # python -m pong support
-        └── core.py        # the entire game
+        └── core.py        # the entire game (~1500 lines)
 ```
 
 Everything lives in one Python file (`src/pong/core.py`). The root `pong.py` is a tiny launcher. `setup.sh` is optional.
@@ -121,10 +165,14 @@ Checks Python version, curses availability, and terminal size, then prints instr
 
 ## Technical details
 
-- **Protocol:** line-delimited JSON over TCP
-- **Server threads:** one accept thread, one handler per client, one game loop per room
+- **Protocol:** line-delimited JSON over TCP (one JSON object per line, terminated by `\n`)
+- **Server threads:** one accept thread, one handler per client, one game loop per room, one UDP broadcaster, one HTTP dashboard server
+- **Discovery:** UDP broadcast on port 10000 every 3 seconds; clients listen on the same port and collect announced servers
 - **Game state:** simulated server-side; clients send key presses and receive state snapshots at ~25 fps
 - **Curses:** uses `curses.color_pair`, `nodelay`, and `getch` for non-blocking input
+- **Chat:** triggered by `/` key, messages relayed through server, filtered for profanity, history capped at 100 messages
+- **Web dashboard:** pure stdlib `http.server.HTTPServer` with a JSON status endpoint and an auto-refreshing HTML page
+- **Synchronization:** shared state protected by `threading.Lock`; server accepts connections while game loops run independently per room
 
 ## License
 
