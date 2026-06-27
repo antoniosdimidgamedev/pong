@@ -20,6 +20,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 _DIAG = (f"{platform.system()} {platform.release()}"
          f" | {platform.machine()}"
          f" | Py {platform.python_version()}")
+_SAVE_DIR = os.path.expanduser("~/.pong")
+_SAVE_PATH = os.path.join(_SAVE_DIR, "save.json")
 
 # ── Constants ───────────────────────────────────────
 PADDLE_WIDTH = 1
@@ -187,6 +189,62 @@ class GameState:
         }
 
 
+# ── Save / Load ─────────────────────────────────────
+def save_game(data):
+    try:
+        os.makedirs(_SAVE_DIR, exist_ok=True)
+        with open(_SAVE_PATH, "w") as f:
+            json.dump(data, f)
+    except:
+        pass
+
+
+def load_game():
+    try:
+        with open(_SAVE_PATH) as f:
+            return json.load(f)
+    except:
+        return None
+
+
+def clear_save():
+    try:
+        os.remove(_SAVE_PATH)
+    except:
+        pass
+
+
+def has_save():
+    return os.path.isfile(_SAVE_PATH)
+
+
+# ── CPU AI ──────────────────────────────────────────
+def cpu_inputs(game, difficulty, tick):
+    if game.ball_dir_x < 0 and abs(game.ball_x - game.right_x) > 15:
+        return []
+    target = game.ball_y
+    center = game.right_y + game.paddle_h / 2
+    diff = target - center
+    configs = {
+        "easy": {"thresh": 3.0, "speed": 1, "jitter": 0.3},
+        "medium": {"thresh": 1.5, "speed": 2, "jitter": 0.1},
+        "hard": {"thresh": 0.5, "speed": 3, "jitter": 0.02},
+    }
+    cfg = configs.get(difficulty, configs["medium"])
+    if random.random() < cfg["jitter"]:
+        return []
+    if abs(diff) < cfg["thresh"]:
+        return []
+    keys = []
+    if diff > 0:
+        for _ in range(cfg["speed"]):
+            keys.append("down")
+    else:
+        for _ in range(cfg["speed"]):
+            keys.append("up")
+    return keys
+
+
 # ── Render ──────────────────────────────────────────
 def render(stdscr, state, left_score, right_score, winner=None, side=None, info=None, chat_msgs=None, chat_input=None, pname="", opponent=""):
     stdscr.clear()
@@ -318,6 +376,73 @@ def play_singleplayer(stdscr):
 
         if winner:
             stdscr.nodelay(0)
+            stdscr.getch()
+            break
+
+        time.sleep(TICK)
+
+
+# ── CPU Game ────────────────────────────────────────
+def play_vs_cpu(stdscr, difficulty):
+    sh, sw = stdscr.getmaxyx()
+    game = GameState(sw, sh)
+    stdscr.nodelay(1)
+    saved = load_game()
+    if saved and saved.get("mode") == "cpu" and saved.get("difficulty") == difficulty:
+        game.left_score = saved.get("left_score", 0)
+        game.right_score = saved.get("right_score", 0)
+        game.left_y = saved.get("left_y", game.left_y)
+        game.right_y = saved.get("right_y", game.right_y)
+        game.ball_x = saved.get("ball_x", game.ball_x)
+        game.ball_y = saved.get("ball_y", game.ball_y)
+        game.ball_dir_x = saved.get("ball_dir_x", game.ball_dir_x)
+        game.ball_dir_y = saved.get("ball_dir_y", game.ball_dir_y)
+
+    tick = 0
+    while True:
+        sh, sw = stdscr.getmaxyx()
+        game.width = sw
+        game.height = sh
+        game.right_x = sw - 3
+        game.paddle_h = max(4, sh // 6)
+
+        key = stdscr.getch()
+        if key in (ord('q'), ord('Q')):
+            save_game({
+                "mode": "cpu", "difficulty": difficulty,
+                "left_score": game.left_score, "right_score": game.right_score,
+                "left_y": game.left_y, "right_y": game.right_y,
+                "ball_x": game.ball_x, "ball_y": game.ball_y,
+                "ball_dir_x": game.ball_dir_x, "ball_dir_y": game.ball_dir_y,
+                "width": game.width, "height": game.height,
+            })
+            break
+
+        if key == ord('s') or key == ord('S'):
+            sh, sw = stdscr.getmaxyx()
+            stdscr.nodelay(0)
+            clear_save()
+            stdscr.addstr(sh // 2, sw // 2 - 10, "Progress saved.")
+            stdscr.addstr(sh // 2 + 1, sw // 2 - 14, "Press any key to continue.")
+            limit_msg = None
+            stdscr.refresh()
+            stdscr.getch()
+            stdscr.nodelay(1)
+            continue
+
+        lu = key in (ord('w'), ord('W'))
+        ld = key in (ord('s'), ord('S'))
+        cpu = cpu_inputs(game, difficulty, tick)
+        ru = "up" in cpu
+        rd = "down" in cpu
+
+        winner = game.update(lu, ld, ru, rd)
+        render(stdscr, game.to_dict(), game.left_score, game.right_score, winner)
+        tick += 1
+
+        if winner:
+            stdscr.nodelay(0)
+            clear_save()
             stdscr.getch()
             break
 
@@ -1587,6 +1712,14 @@ def main_menu(stdscr):
     stdscr.keypad(1)
 
     while True:
+        play_items = []
+        if has_save():
+            play_items.append(["Continue Saved Game", "CPU"])
+        play_items.extend([
+            ["Player vs CPU", "Easy / Medium / Hard"],
+            ["Player vs Player", "local 2-player"],
+            "Multiplayer",
+        ])
         choice = menu_loop(stdscr, " Pong ", [
             ["Play", "Singleplayer"],
             "How to Play",
@@ -1594,12 +1727,25 @@ def main_menu(stdscr):
         ])
 
         if choice == 0:
-            sub = menu_loop(stdscr, " Play ", ["Singleplayer", "Multiplayer"])
-            if sub == 0:
-                play_singleplayer(stdscr)
-            elif sub == 1:
-                if multiplayer_submenu(stdscr):
-                    return
+            sub = menu_loop(stdscr, " Play ", play_items)
+            if sub is None or sub == -1:
+                continue
+            if has_save() and sub == 0:
+                saved = load_game()
+                diff = saved.get("difficulty", "medium") if saved else "medium"
+                play_vs_cpu(stdscr, diff)
+            else:
+                offset = 1 if has_save() else 0
+                if isinstance(play_items[sub], list) and play_items[sub][0] == "Player vs CPU":
+                    diff = menu_loop(stdscr, " CPU Difficulty ",
+                                     ["Easy", "Medium", "Hard"])
+                    if diff >= 0:
+                        play_vs_cpu(stdscr, ["easy", "medium", "hard"][diff])
+                elif isinstance(play_items[sub], list) and play_items[sub][0] == "Player vs Player":
+                    play_singleplayer(stdscr)
+                elif play_items[sub] == "Multiplayer":
+                    if multiplayer_submenu(stdscr):
+                        return
 
         elif choice == 1:
             show_how_to_play(stdscr)
