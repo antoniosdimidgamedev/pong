@@ -1,7 +1,5 @@
 # Pong
 
-[![Star History](https://api.star-history.com/svg?repos=antoniosdimidgamedev/pong&type=Date)](https://star-history.com/#antoniosdimidgamedev/pong&Date)
-
 Classic Pong for the terminal. Player vs CPU with three difficulty levels, local two-player on one keyboard, or multiplayer over LAN with room-based matchmaking, in-game chat, a web dashboard, and automatic server discovery. No dependencies beyond Python 3.6+ and curses. Runs on Linux, macOS, and Termux.
 
 ## Features
@@ -364,3 +362,5 @@ Only CPU games can be saved. The save is automatically deleted when a game ends 
 ## License
 
 MIT. Do whatever you want with it.
+
+[![Star History](https://api.star-history.com/svg?repos=antoniosdimidgamedev/pong&type=Date)](https://star-history.com/#antoniosdimidgamedev/pong&Date)
