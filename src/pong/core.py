@@ -287,6 +287,7 @@ def render(stdscr, state, left_score, right_score, winner=None, side=None, info=
 def play_singleplayer(stdscr):
     sh, sw = stdscr.getmaxyx()
     game = GameState(sw, sh)
+    stdscr.nodelay(1)
 
     while True:
         sh, sw = stdscr.getmaxyx()
@@ -1024,7 +1025,6 @@ def input_dialog(stdscr, title, prompt, default=""):
 
 def show_server_screen(stdscr):
     curses.curs_set(0)
-    stdscr.nodelay(1)
     stdscr.clear()
 
     port = DEFAULT_PORT
@@ -1202,14 +1202,46 @@ def server_browser(stdscr):
 
     sel = 0
     last_count = -1
+    dirty = True
 
     while True:
         with lock:
             count = len(discovered)
-
-        if count != last_count:
+        changed = count != last_count
+        if changed:
             sel = min(sel, count)
             last_count = count
+            dirty = True
+
+        key = stdscr.getch()
+        if key != -1:
+            dirty = True
+            if key in (ord('q'), ord('Q'), 27):
+                return None
+            elif key == curses.KEY_UP:
+                sel = max(0, sel - 1)
+            elif key == curses.KEY_DOWN:
+                sel = min(count + 1, sel + 1)
+            elif key == ord('r') or key == ord('R'):
+                with lock:
+                    discovered.clear()
+                sel = 0
+            elif key in (ord('\n'), ord(' ')):
+                if sel < count:
+                    with lock:
+                        ip, p, _ = discovered[sel]
+                    return ip, p
+                elif sel == count:
+                    ip = input_dialog(stdscr, " Join Server ", "Server IP:", "")
+                    if ip:
+                        return ip, DEFAULT_PORT
+                else:
+                    return None
+
+        if not dirty:
+            time.sleep(0.05)
+            continue
+        dirty = False
 
         h, w = stdscr.getmaxyx()
         stdscr.clear()
@@ -1274,31 +1306,7 @@ def server_browser(stdscr):
             pass
 
         stdscr.refresh()
-
-        key = stdscr.getch()
-        if key in (ord('q'), ord('Q'), 27):
-            return None
-        elif key == curses.KEY_UP:
-            sel = max(0, sel - 1)
-        elif key == curses.KEY_DOWN:
-            sel = min(count + 1, sel + 1)
-        elif key == ord('r') or key == ord('R'):
-            with lock:
-                discovered.clear()
-            sel = 0
-        elif key in (ord('\n'), ord(' ')):
-            if sel < count:
-                with lock:
-                    ip, p, _ = discovered[sel]
-                return ip, p
-            elif sel == count:
-                ip = input_dialog(stdscr, " Join Server ", "Server IP:", "")
-                if ip:
-                    return ip, DEFAULT_PORT
-            else:
-                return None
-
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 
 # ── Server Management Screen ──────────────────────
@@ -1337,8 +1345,79 @@ def server_management_screen(stdscr, config):
     curses.curs_set(0)
     stdscr.nodelay(1)
     sel_room = 0
+    sel_player = -1
+    dirty = True
 
     while not stop_event.is_set():
+        with rooms_lock:
+            rlist = list(rooms.items())
+
+        key = stdscr.getch()
+        if key != -1:
+            dirty = True
+            if key == ord('q') or key == ord('Q'):
+                break
+            elif key == ord('j') or key == ord('J'):
+                sock.setblocking(0)
+                try:
+                    play_client(stdscr, "127.0.0.1", port)
+                except:
+                    pass
+                sock.setblocking(0)
+                stdscr.nodelay(1)
+                curses.curs_set(0)
+                dirty = True
+            elif key == ord('k') or key == ord('K'):
+                if sel_player >= 0 and rlist:
+                    rn, rm = rlist[sel_room]
+                    with rooms_lock:
+                        ps = rm.players[:]
+                    if 0 <= sel_player < len(ps):
+                        target = ps[sel_player]
+                        with rooms_lock:
+                            log(f"{target.name} kicked by host")
+                            try:
+                                target.conn.close()
+                            except:
+                                pass
+                    sel_player = -1
+            elif key == curses.KEY_UP:
+                if sel_player >= 0:
+                    with rooms_lock:
+                        pcount = len(rlist[sel_room][1].players) if rlist else 0
+                    sel_player = (sel_player - 1) % max(1, pcount)
+                elif rlist:
+                    sel_room = (sel_room - 1) % len(rlist)
+            elif key == curses.KEY_DOWN:
+                if sel_player >= 0:
+                    with rooms_lock:
+                        pcount = len(rlist[sel_room][1].players) if rlist else 0
+                    sel_player = (sel_player + 1) % max(1, pcount)
+                elif rlist:
+                    sel_room = (sel_room + 1) % len(rlist)
+            elif key in (ord('\n'), ord(' ')):
+                if rlist:
+                    if sel_player >= 0:
+                        sel_player = -1
+                    else:
+                        sel_player = 0
+            elif key == 27:
+                if sel_player >= 0:
+                    sel_player = -1
+            elif key == ord('r') or key == ord('R'):
+                pass
+
+            if rlist and sel_player >= 0:
+                rn, rm = rlist[sel_room]
+                with rooms_lock:
+                    pcount = len(rm.players)
+                sel_player = min(sel_player, max(0, pcount - 1)) if pcount > 0 else -1
+
+        if not dirty:
+            time.sleep(0.05)
+            continue
+        dirty = False
+
         h, w = stdscr.getmaxyx()
         stdscr.clear()
 
@@ -1367,9 +1446,6 @@ def server_management_screen(stdscr, config):
             pass
         y += 1
 
-        with rooms_lock:
-            rlist = list(rooms.items())
-
         if not rlist:
             try:
                 stdscr.addstr(y, w // 2 - 12, "(no rooms yet)", curses.color_pair(3))
@@ -1378,13 +1454,13 @@ def server_management_screen(stdscr, config):
             y += 1
             sel_room = 0
         else:
-            sel_room = min(sel_room, len(rlist) - 1)
+            sel_room = min(sel_room, len(rlist) - 1) if sel_room >= len(rlist) else sel_room
             for idx, (rn, rm) in enumerate(rlist):
-                marker = " >" if idx == sel_room else "  "
+                marker = " >" if idx == sel_room and sel_player < 0 else "  "
                 players = len(rm.players)
                 pnames = ", ".join(p.name for p in rm.players)
                 status = f"{players}/2" + (" FULL" if players >= 2 else "")
-                pair = curses.color_pair(1) if idx == sel_room else curses.color_pair(3)
+                pair = curses.color_pair(1) if (idx == sel_room and sel_player < 0) else curses.color_pair(3)
                 line = f"{marker}  {rn}  ({status})"
                 if pnames:
                     line += f"  [{pnames}]"
@@ -1393,6 +1469,18 @@ def server_management_screen(stdscr, config):
                 except:
                     pass
                 y += 1
+
+                if idx == sel_room and sel_player >= 0:
+                    with rooms_lock:
+                        ps = rm.players[:]
+                    for pi, p in enumerate(ps):
+                        pm = " >" if pi == sel_player else "  "
+                        pp = curses.color_pair(1) if pi == sel_player else curses.color_pair(3)
+                        try:
+                            stdscr.addstr(y, w // 2 - 11, f"{pm}  {p.name}  ({p.side})", pp)
+                        except:
+                            pass
+                        y += 1
 
         y += 1
         with events_lock:
@@ -1411,10 +1499,11 @@ def server_management_screen(stdscr, config):
                 pass
             y += 1
 
+        hints = "j join  k kick  q stop"
+        if sel_player >= 0:
+            hints = "k kick player  esc back"
         try:
-            stdscr.addstr(h - 2, w // 2 - 22,
-                          "j  join locally   r  rescan rooms   q  stop server",
-                          curses.color_pair(3))
+            stdscr.addstr(h - 2, w // 2 - len(hints) // 2, hints, curses.color_pair(3))
         except:
             pass
 
@@ -1427,31 +1516,7 @@ def server_management_screen(stdscr, config):
             pass
 
         stdscr.refresh()
-
-        key = stdscr.getch()
-        if key == ord('q') or key == ord('Q'):
-            break
-        elif key == ord('j') or key == ord('J'):
-            sock.setblocking(0)
-            try:
-                play_client(stdscr, "127.0.0.1", port)
-            except:
-                pass
-            sock.setblocking(0)
-            stdscr.nodelay(1)
-            curses.curs_set(0)
-        elif key == ord('r') or key == ord('R'):
-            pass
-        elif key == curses.KEY_UP:
-            if rlist:
-                sel_room = (sel_room - 1) % len(rlist)
-        elif key == curses.KEY_DOWN:
-            if rlist:
-                sel_room = (sel_room + 1) % len(rlist)
-        elif key == ord('\n') and rlist:
-            pass
-
-        time.sleep(0.1)
+        time.sleep(0.05)
 
     stop_event.set()
     stop_disc.set()
