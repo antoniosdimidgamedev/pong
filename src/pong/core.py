@@ -5,6 +5,7 @@ Terminal UI menu — no flags needed.
 """
 
 import curses
+import hashlib
 import json
 import os
 import platform
@@ -1823,11 +1824,46 @@ def main_menu(stdscr):
 
 
 def main():
+    if not _check_integrity():
+        sys.exit(1)
     os.environ.setdefault("TERM", "xterm-256color")
     try:
         curses.wrapper(main_menu)
     except KeyboardInterrupt:
         pass
+
+
+def _check_integrity():
+    sums_path = os.path.join(os.path.dirname(__file__), "..", "..", "SHA256SUMS")
+    if not os.path.exists(sums_path):
+        print("Error: SHA256SUMS not found. File may be corrupted.", file=sys.stderr)
+        return False
+    with open(sums_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            expected, relpath = parts
+            fpath = os.path.join(os.path.dirname(__file__), "..", "..", relpath)
+            if os.path.exists(fpath):
+                with open(fpath, "rb") as fh:
+                    actual = hashlib.sha256(fh.read()).hexdigest()
+                if actual != expected:
+                    print(
+                        f"Integrity check FAILED for {relpath}.\n"
+                        f"  Expected: {expected}\n"
+                        f"  Actual:   {actual}\n"
+                        "The file has been modified or corrupted. Refusing to run.\n"
+                        "Re-download from: https://github.com/antoniosdimidgamedev/pong",
+                        file=sys.stderr,
+                    )
+                    return False
+                return True
+    print("Error: no files listed in SHA256SUMS.", file=sys.stderr)
+    return False
 
 
 if __name__ == "__main__":
