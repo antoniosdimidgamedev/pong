@@ -58,48 +58,56 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <style>
  *{margin:0;padding:0;box-sizing:border-box}
  body{font-family:system-ui,sans-serif;background:#111;color:#e0e0e0;padding:20px}
- h1{color:#0ff;margin-bottom:4px}
+ h1{color:#0ff;margin-bottom:2px}
  .sub{color:#888;font-size:.9em;margin-bottom:20px}
- .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+ .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
  .card{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:16px}
  .card h2{color:#0ff;font-size:1em;margin-bottom:12px}
  table{width:100%;border-collapse:collapse}
- th{text-align:left;color:#888;font-size:.8em;text-transform:uppercase;padding:4px 8px}
+ th{text-align:left;color:#888;font-size:.8em;text-transform:uppercase;padding:4px 8px;border-bottom:1px solid #333}
  td{padding:6px 8px;border-top:1px solid #222}
- .status-running{color:#0f0}
- .status-full{color:#fa0}
- .event{color:#aaa;font-size:.85em;padding:2px 0}
- .event time{color:#666;margin-right:8px}
- .footer{margin-top:24px;color:#555;font-size:.8em}
+ .badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.75em;font-weight:600}
+ .badge-play{background:#0a3;color:#fff}
+ .badge-wait{background:#640;color:#fa0}
+ .badge-full{background:#a00;color:#fff}
+ .score{font-weight:700;color:#0ff}
+ .ev{color:#aaa;font-size:.85em;padding:2px 0}
+ .ev time{color:#555;margin-right:8px}
+ .ft{margin-top:24px;color:#444;font-size:.8em}
 </style></head><body>
 <h1>&#9616;&nbsp;Pong Server</h1>
 <div class="sub" id="info">Connecting...</div>
-<div class="grid">
- <div class="card"><h2>&#9654;&nbsp;Active Rooms</h2><div id="rooms"><p style="color:#666">No rooms yet</p></div></div>
- <div class="card"><h2>&#9881;&nbsp;Server Info</h2>
+<div class="cards">
+ <div class="card"><h2>&#9654;&nbsp;Rooms</h2><div id="rooms"><p style="color:#666">No rooms</p></div></div>
+ <div class="card"><h2>&#9881;&nbsp;Server</h2>
   <table><tr><th>Property</th><th>Value</th></tr>
-   <tr><td>Status</td><td><span class="status-running">Running</span></td></tr>
+   <tr><td>Status</td><td><span class="badge badge-play">Running</span></td></tr>
    <tr><td>Players</td><td id="players">0</td></tr>
    <tr><td>Uptime</td><td id="uptime">--</td></tr>
   </table></div>
 </div>
-<div class="card" style="margin-top:16px"><h2>&#9776;&nbsp;Event Log</h2><div id="events"><p style="color:#666">No events yet</p></div></div>
-<div class="footer" id="footer"></div>
+<div class="card" style="margin-top:16px"><h2>&#9776;&nbsp;Events</h2><div id="events"><p style="color:#666">None yet</p></div></div>
+<div class="ft" id="footer"></div>
 <script>
+function fmt(s){let h=Math.floor(s/3600),m=Math.floor((s%3600)/60),s2=s%60;return h+'h '+m+'m '+s2+'s'}
+function badge(txt,cls){return '<span class="badge badge-'+cls+'">'+txt+'</span>'}
 async function load(){try{
  const r=await fetch('/status'),d=await r.json();
  document.getElementById('info').textContent=d.name+' | '+d.ip+':'+d.port+' | Web: http://'+d.ip+':'+d.web_port;
  let rh=d.rooms.map(r=>{
   let pn=r.player_names.join(', ')||'&mdash;';
-  return '<tr'+(r.full?' style="color:#fa0"':'')+'><td>'+(r.players>0?'&#9679; ':'')+r.name+'</td><td>'+r.players+'/2</td><td style="color:#aaa">'+pn+'</td></tr>'}).join('');
- if(!rh)rh='<tr><td colspan="3" style="color:#666">No rooms yet</td></tr>';
- document.getElementById('rooms').innerHTML='<table><tr><th>Room</th><th>Players</th><th>Names</th></tr>'+rh+'</table>';
+  let st=r.playing?badge('play','play'):badge('wait','wait');
+  if(r.full)st=badge('full','full');
+  let sc=(r.playing||r.left_score||r.right_score)?'<span class="score">'+r.left_score+'–'+r.right_score+'</span>':'&mdash;';
+  let up=fmt(r.uptime);
+  return '<tr><td>'+(r.players>0?'&#9679; ':'')+r.name+'</td><td>'+st+'</td><td>'+r.players+'/2</td><td style="color:#aaa">'+pn+'</td><td>'+sc+'</td><td style="color:#555">'+up+'</td></tr>'}).join('');
+ if(!rh)rh='<tr><td colspan="6" style="color:#666">No rooms</td></tr>';
+ document.getElementById('rooms').innerHTML='<table><tr><th>Room</th><th>Status</th><th>Players</th><th>Names</th><th>Score</th><th>Uptime</th></tr>'+rh+'</table>';
  document.getElementById('players').textContent=d.total_players;
- let s=d.uptime,h=Math.floor(s/3600),m=Math.floor((s%3600)/60),s2=s%60;
- document.getElementById('uptime').textContent=h+'h '+m+'m '+s2+'s';
- let eh=d.events.map(e=>'<div class="event"><time>'+e.time+'</time>'+e.msg+'</div>').join('');
- document.getElementById('events').innerHTML=eh||'<p style="color:#666">No events yet</p>';
- document.getElementById('footer').textContent='Last updated: '+new Date().toLocaleTimeString();
+ document.getElementById('uptime').textContent=fmt(d.uptime);
+ let eh=d.events.map(e=>'<div class="ev"><time>'+e.time+'</time>'+e.msg+'</div>').join('');
+ document.getElementById('events').innerHTML=eh||'<p style="color:#666">None yet</p>';
+ document.getElementById('footer').textContent='Updated: '+new Date().toLocaleTimeString();
 }catch(e){}setTimeout(load,2000)}load();
 </script></body></html>"""
 
@@ -388,10 +396,7 @@ def _start_web_dashboard(rooms, rooms_lock, events, events_lock, start_time,
 
         def _json(self):
             with rooms_lock:
-                rlist = [{"name": r.name, "players": len(r.players),
-                          "full": len(r.players) >= 2,
-                          "player_names": [p.name for p in r.players]}
-                         for r in rooms.values()]
+                rlist = [r.info() for r in rooms.values()]
             with events_lock:
                 elist = [{"time": e[0], "msg": e[1]} for e in events[-30:]]
             data = {
@@ -448,8 +453,24 @@ class Room:
         self.inputs = {"left": set(), "right": set()}
         self.chat_history = []
         self.alive = True
+        self.created_at = time.time()
+        self.playing = False
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
+
+    def info(self):
+        with self.lock:
+            return {
+                "name": self.name,
+                "players": len(self.players),
+                "full": len(self.players) >= 2,
+                "player_names": [p.name for p in self.players],
+                "player_sides": {p.name: p.side for p in self.players},
+                "playing": self.playing,
+                "left_score": self.game.left_score,
+                "right_score": self.game.right_score,
+                "uptime": int(time.time() - self.created_at),
+            }
 
     def add(self, player):
         with self.lock:
@@ -488,7 +509,14 @@ class Room:
         while self.alive:
             time.sleep(TICK)
             with self.lock:
-                if len(self.players) < 2:
+                was_playing = self.playing
+                self.playing = len(self.players) >= 2
+
+                if not self.playing:
+                    if was_playing:
+                        self.game.reset()
+                        self.inputs["left"].clear()
+                        self.inputs["right"].clear()
                     continue
 
                 winner = self.game.update(
@@ -1456,12 +1484,18 @@ def server_management_screen(stdscr, config):
         else:
             sel_room = min(sel_room, len(rlist) - 1) if sel_room >= len(rlist) else sel_room
             for idx, (rn, rm) in enumerate(rlist):
+                ri = rm.info()
                 marker = " >" if idx == sel_room and sel_player < 0 else "  "
-                players = len(rm.players)
-                pnames = ", ".join(p.name for p in rm.players)
-                status = f"{players}/2" + (" FULL" if players >= 2 else "")
+                players = ri["players"]
+                pnames = ", ".join(ri["player_names"])
+                status = f"{players}/2" + (" FULL" if ri["full"] else "")
+                if ri["playing"]:
+                    status += " PLAYING"
+                score = ""
+                if ri["playing"] or ri["left_score"] or ri["right_score"]:
+                    score = f"  {ri['left_score']}-{ri['right_score']}"
                 pair = curses.color_pair(1) if (idx == sel_room and sel_player < 0) else curses.color_pair(3)
-                line = f"{marker}  {rn}  ({status})"
+                line = f"{marker}  {rn}  ({status}){score}"
                 if pnames:
                     line += f"  [{pnames}]"
                 try:
