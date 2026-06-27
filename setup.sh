@@ -25,16 +25,14 @@ echo "Using: $($PYTHON --version)"
 echo "Checking dependencies..."
 
 $PYTHON -c "
-import curses, platform, os, sys
+import platform, sys
 print(f'  OS: {platform.system()} {platform.release()}')
 print(f'  Arch: {platform.machine()}')
 print(f'  Python: {platform.python_version()}')
 try:
-    stdscr = curses.initscr()
-    curses.endwin()
+    import curses
     print('  curses: OK')
-except:
-    curses.endwin()
+except ImportError:
     print('  curses: FAIL — install ncurses')
     print('    Termux: pkg install ncurses')
     sys.exit(1)
