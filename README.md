@@ -158,6 +158,7 @@ pong/
 ├── pong.py              # entry point (just launches src/pong/core.py)
 ├── LICENSE
 ├── README.md
+├── SHA256SUMS              # integrity hash for src/pong/core.py
 ├── setup.sh              # dependency checker
 ├── description.txt       # short GitHub description
 └── src/
@@ -186,6 +187,18 @@ curses ships with the system Python. No extra setup needed.
 
 ```bash
 python3 pong.py
+```
+
+## Integrity verification
+
+```bash
+python3 pong.py --verify
+```
+
+Checks the SHA256 hash of `src/pong/core.py` against the expected value in `SHA256SUMS`. Exits with an error message if the file has been modified.
+
+```bash
+cd pong && sha256sum -c SHA256SUMS    # alternative using system tools
 ```
 
 ## Setup script
