@@ -20,7 +20,7 @@ Classic Pong for the terminal. Player vs CPU with three difficulty levels, local
 - **Terminal UI** — full curses interface with menus, IP input, a room selector, and a server browser with auto-discovery
 - **Diagnostics** — OS, kernel, architecture, and Python version shown at the bottom of every menu
 - **Portable** — pure Python, no pip installs, works wherever Python and curses do
-- **PyPI package** — install with `pip install terminal-pong` and run with the `pong` command
+- **No dependencies** — pure Python stdlib, no pip install required
 
 ## Quick start
 
@@ -30,12 +30,7 @@ cd pong
 python3 pong.py
 ```
 
-Or install from PyPI and run from anywhere:
 
-```bash
-pip install terminal-pong
-pong
-```
 
 ## How to play
 
@@ -161,7 +156,6 @@ The page auto-refreshes every 2 seconds via a `/status` JSON endpoint. No extern
 ```
 pong/
 ├── pong.py              # entry point (just launches src/pong/core.py)
-├── pyproject.toml        # PyPI build config (pip install terminal-pong)
 ├── LICENSE
 ├── README.md
 ├── setup.sh              # dependency checker
@@ -169,8 +163,7 @@ pong/
 └── src/
     └── pong/
         ├── __init__.py    # exports main()
-        ├── __main__.py    # python -m pong support
-        └── core.py        # the entire game (~1500 lines)
+        └── core.py        # the entire game (~1760 lines)
 ```
 
 Everything lives in one Python file (`src/pong/core.py`). The root `pong.py` is a tiny launcher. `setup.sh` is optional.
