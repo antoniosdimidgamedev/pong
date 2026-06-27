@@ -1,14 +1,17 @@
 # Pong
 
-Classic Pong for the terminal. Singleplayer on one keyboard or multiplayer over LAN with room-based matchmaking, in-game chat, a web dashboard, and automatic server discovery. No dependencies beyond Python 3.6+ and curses. Runs on Linux, macOS, and Termux.
+Classic Pong for the terminal. Player vs CPU with three difficulty levels, local two-player on one keyboard, or multiplayer over LAN with room-based matchmaking, in-game chat, a web dashboard, and automatic server discovery. No dependencies beyond Python 3.6+ and curses. Runs on Linux, macOS, and Termux.
 
 ## Features
 
-- **Singleplayer mode** — two players share one keyboard (W/S vs arrow keys)
+- **Player vs CPU** — three difficulty levels (Easy, Medium, Hard) with adaptive AI that tracks the ball, reacts with human-like delay, and has configurable paddle speed and accuracy
+- **Save / Load** — press `S` during a CPU game to save your progress to `~/.pong/save.json`; resume later from the main menu via **Continue Saved Game**
+- **Local two-player** — two players share one keyboard (W/S vs arrow keys)
 - **LAN multiplayer** — built-in TCP server with automatic IP detection, UDP broadcast discovery, and a server browser
 - **Room templates** — pick from 10 preset room names (Classic, Rally, Speed, Tournament, Practice, Sudden Death, Challenge, Arena, Grand Slam, Showdown) or create a new one
-- **Web dashboard** — live HTTP dashboard showing server status, active rooms, player names, and recent events; viewable from any browser on the LAN
-- **Server management screen** — when hosting, a curses interface shows rooms, players, and live events; hosts can join their own games locally
+- **Web dashboard** — live HTTP dashboard showing server status, active rooms with scores and player names, and recent events; viewable from any browser on the LAN
+- **Server management screen** — when hosting, a curses interface shows rooms, connected players, live scores, and a real-time event log; hosts can join their own games locally
+- **Kick players** — from the host screen, press Enter on a room to see its players, navigate to a player, and press `k` to kick them
 - **Custom player names** — prompted on join; displayed in-game, in chat, in the management screen, and in the web dashboard
 - **Custom server names** — configure a name before starting; broadcast in UDP discovery and shown in the server browser
 - **In-game chat** — press `/` to open chat input, type your message, press Enter to send, Esc to cancel
@@ -39,28 +42,49 @@ pong
 ### Menu
 
 ```
- Pong                      Play                      Multiplayer
-  > Play              >     Singleplayer            > Host Server
-    How to Play             Multiplayer >              Join Server
-    Quit
+ Pong                         Play
+  > Play                 >     Continue Saved Game   (if save exists)
+    How to Play                Player vs CPU >
+    Quit                          Easy / Medium / Hard
+                               Player vs Player
+                               Multiplayer >
+                                 Host Server
+                                 Join Server
 ```
 
 Use arrow keys to navigate, Enter to select, Q or Esc to go back.
 
 ### Controls
 
-| Player | Paddle up | Paddle down | Chat | Quit |
-|---|---|---|---|---|
-| Left (W/S) | `W` | `S` | `/` | `Q` |
-| Right (arrows) | `↑` | `↓` | `/` | `Q` |
+| Mode | Player | Paddle up | Paddle down | Special | Quit |
+|---|---|---|---|---|---|
+| Two-player | Left (W/S) | `W` | `S` | — | `Q` |
+| Two-player | Right (arrows) | `↑` | `↓` | — | `Q` |
+| vs CPU | You (W/S) | `W` | `S` | `S` save | `Q` |
+| Multiplayer | Left (W/S) | `W` | `S` | `/` chat | `Q` |
+| Multiplayer | Right (arrows) | `↑` | `↓` | `/` chat | `Q` |
 
 ### Rules
 
 First to 5 points wins. After a point the ball resets to center and launches toward the player who was scored on.
 
-### Chat
+### Chat (Multiplayer only)
 
 Press `/` to enter chat mode. The prompt appears at the bottom of the screen. Type your message and press Enter to send. Press Esc to cancel. Chat messages from both players are shown in the bottom few lines of the game screen. If you join a room with existing chat history, the last 100 messages are replayed to you.
+
+### Save / Load (CPU only)
+
+Press `S` during a CPU game to save your progress. The current score, paddle positions, ball state, and difficulty are written to `~/.pong/save.json`. On the next launch, **Continue Saved Game** appears at the top of the Play menu. The save is erased automatically when the game ends (someone wins) or can be discarded by starting a fresh game.
+
+## Player vs CPU
+
+Select **Play > Player vs CPU** then choose a difficulty:
+
+- **Easy** — slow paddle, delayed reactions, frequently misses. Good for beginners.
+- **Medium** — moderate tracking speed, occasional jitter. A fair opponent.
+- **Hard** — fast paddle, minimal delay, tracks the ball tightly. Difficult to beat.
+
+The CPU paddle only chases the ball when it is moving toward it. When the ball moves away, the CPU drifts back to center. This makes the AI feel more natural and less robotic.
 
 ## LAN multiplayer
 
@@ -77,8 +101,27 @@ No internet required. Works over any local network (Wi-Fi, Ethernet, mobile hots
 4. Press `s` to start
 5. Share the displayed IP address, or let other players find your server via automatic discovery
 
-The management screen shows active rooms, connected players, and a live event log. From here you can:
+The management screen shows active rooms, connected players, live scores, and a real-time event log:
+
+```
+ Pong — Server: My Server
+ IP: 192.168.1.100:9999   Web: http://192.168.1.100:8080   Uptime: 0h 2m 34s
+
+ Active Rooms:
+   > Classic  (2/2 PLAYING)  2-3  [Alice, Bob]
+     Rally    (1/2)  [Charlie]
+
+ Recent Events:
+   [10:32] Room 'Classic' created
+   [10:33] Alice (left) joined 'Classic'
+   [10:34] Bob (right) joined 'Classic'
+
+ j  join locally   k  kick player   q  stop server
+```
+
+From here you can:
 - Press `j` to join your own server as a local client — play on 127.0.0.1, then return to the management screen when the game ends
+- Press Enter on a room to see its player list, navigate with arrows, and press `k` to kick a player
 - Press `q` to stop the server and go back to the menu
 
 ### Join
@@ -110,7 +153,7 @@ http://<server-ip>:8080
 The dashboard shows:
 - Server name, IP, and game port
 - Uptime and total player count
-- A table of active rooms with player names
+- A table of active rooms showing status (waiting / playing / full), player names, current score, and room uptime
 - An event log with timestamps
 
 The page auto-refreshes every 2 seconds via a `/status` JSON endpoint. No external web server or dependencies needed — it is built into the game.
@@ -171,7 +214,9 @@ Checks Python version, curses availability, and terminal size, then prints instr
 - **Game state:** simulated server-side; clients send key presses and receive state snapshots at ~25 fps
 - **Curses:** uses `curses.color_pair`, `nodelay`, and `getch` for non-blocking input
 - **Chat:** triggered by `/` key, messages relayed through server, filtered for profanity, history capped at 100 messages
-- **Web dashboard:** pure stdlib `http.server.HTTPServer` with a JSON status endpoint and an auto-refreshing HTML page
+- **Web dashboard:** pure stdlib `http.server.HTTPServer` with a JSON status endpoint and an auto-refreshing HTML page showing status badges, scores, and player names
+- **CPU AI:** each tick the AI evaluates ball position and direction, applies difficulty-based reaction threshold and jitter, then emits the appropriate up/down keys
+- **Save system:** serializes `GameState` fields plus mode and difficulty to `~/.pong/save.json`; only available in CPU mode
 - **Synchronization:** shared state protected by `threading.Lock`; server accepts connections while game loops run independently per room
 
 ## License
