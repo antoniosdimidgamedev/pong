@@ -61,6 +61,31 @@ Use arrow keys to navigate, Enter to select, Q or Esc to go back.
 
 First to 5 points wins. After a point the ball resets to center and launches toward the player who was scored on.
 
+### Game screen
+
+```
+  <Alice>                   3-2                   <Bob>
+   |                                              |
+   |                     :                        |
+   |                O    :                        |
+   |                     :                        |
+   |                     :                        |
+   |                     :                    |
+   |                     :                        |
+   |                     :                        |
+   |                     :                  |
+   |                :                        |
+   |                     :                        |
+   |                                              |
+   |                                              |
+   1:  <Alice> won! (5-3)                   2:
+   ____________________chat_______________________
+   <left>  nice shot!
+   <right> thanks!
+```
+
+The center line marks the court. `O` is the ball. `|` on each side are the paddles. The score is displayed at the top, player names at the corners, and recent chat messages at the bottom.
+
 ### Chat (Multiplayer only)
 
 Press `/` to enter chat mode. The prompt appears at the bottom of the screen. Type your message and press Enter to send. Press Esc to cancel. Chat messages from both players are shown in the bottom few lines of the game screen. If you join a room with existing chat history, the last 100 messages are replayed to you.
@@ -189,6 +214,19 @@ curses ships with the system Python. No extra setup needed.
 python3 pong.py
 ```
 
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `curses.error` on launch | Ensure TERM is set: `export TERM=xterm-256color` (pong does this automatically, but some shells override it) |
+| No servers found (Join) | Check both machines are on the same LAN / Wi-Fi. Verify the host's firewall allows inbound TCP on the game port (default 9999) and UDP on port 10000. On Linux: `sudo ufw allow 9999/tcp; sudo ufw allow 10000/udp`. |
+| `Connection refused` | The server must be started **before** the client tries to join. Verify the IP and port are correct. |
+| Web dashboard not loading | Confirm the web port (default 8080) is not blocked. Check with `curl http://<server-ip>:8080/status`. The dashboard binds to `0.0.0.0`, so any device on the LAN can reach it. |
+| CPU game doesn't save | Ensure `~/.pong/` is writable. The save file is `~/.pong/save.json`. Press `S` during a CPU game — a confirmation message appears. |
+| Screen flickering | The menu only redraws on input. If you see flicker, your terminal may emulate escape sequences slowly. Try a lighter terminal emulator (e.g. Alacritty, Kitty) or set `TERM=vt100`. |
+| Termux — keyboard issues | Termux's extra keys toggle may interfere with arrow keys. Use Volume-up + Q/W for arrows, or install a terminal with proper arrow key support. |
+| Termux — no curses | Run `pkg install ncurses` and ensure Python is installed via `pkg install python`, not a third-party build. |
+
 ## Integrity verification
 
 ```bash
@@ -210,18 +248,108 @@ chmod +x setup.sh
 
 Checks Python version, curses availability, and terminal size, then prints instructions.
 
-## Technical details
+## Architecture
 
-- **Protocol:** line-delimited JSON over TCP (one JSON object per line, terminated by `\n`)
-- **Server threads:** one accept thread, one handler per client, one game loop per room, one UDP broadcaster, one HTTP dashboard server
-- **Discovery:** UDP broadcast on port 10000 every 3 seconds; clients listen on the same port and collect announced servers
-- **Game state:** simulated server-side; clients send key presses and receive state snapshots at ~25 fps
-- **Curses:** uses `curses.color_pair`, `nodelay`, and `getch` for non-blocking input
-- **Chat:** triggered by `/` key, messages relayed through server, filtered for profanity, history capped at 100 messages
-- **Web dashboard:** pure stdlib `http.server.HTTPServer` with a JSON status endpoint and an auto-refreshing HTML page showing status badges, scores, and player names
-- **CPU AI:** each tick the AI evaluates ball position and direction, applies difficulty-based reaction threshold and jitter, then emits the appropriate up/down keys
-- **Save system:** serializes `GameState` fields plus mode and difficulty to `~/.pong/save.json`; only available in CPU mode
-- **Synchronization:** shared state protected by `threading.Lock`; server accepts connections while game loops run independently per room
+### Thread model
+
+```
+main thread                        threads
+┌──────────────────┐         ┌───────────────────┐
+│ main_menu        │── spawn │→ game_loop (per client)
+│ server_mgmt      │── spawn │→ _run_server (TCP accept)
+│ play_vs_cpu      │── spawn │→ Room._loop (per room)
+│ play_singleplayer│── spawn │→ _discovery_broadcaster (UDP)
+│ play_client      │── spawn │→ _start_web_dashboard (HTTP)
+└──────────────────┘         └───────────────────┘
+```
+
+- **Main thread** runs the curses UI (menus, management screen, game rendering).
+- **_run_server** — single thread that accepts incoming TCP connections and spawns a handler thread per client.
+- **Room._loop** — one per room; runs at 25 fps, reads input sets, updates `GameState`, and broadcasts state to both players.
+- **_handle_client** — one per connected player; parses incoming JSON messages and dispatches to the room.
+- **_discovery_broadcaster** — sends a UDP broadcast packet every 3 seconds announcing the server.
+- **_start_web_dashboard** — minimal `http.server.HTTPServer` serving JSON status and auto-refreshing HTML.
+
+### Game loop (server-side)
+
+Each room's `_loop` runs continuously at `TICK` (0.04s ≈ 25 fps):
+
+1. If fewer than 2 players present, set `playing = False` and skip.
+2. Read input sets (`{"left": {"w"}, "right": {"up", "down"}}`) collected by handler threads.
+3. Call `GameState.update()` which moves the ball, checks paddle collisions, and detects scoring.
+4. Serialize the resulting state to a dict and broadcast as `{"type": "state", …}` to both players (or `{"type": "win", "winner": …}` on game end).
+5. After a win, pause 2 seconds, reset the ball, and continue.
+
+### Protocol: message types
+
+All messages are line-delimited JSON over TCP. Each object is sent as a single line terminated by `\n`.
+
+#### Client → Server
+
+| Type | Fields | Purpose |
+|---|---|---|
+| `list_rooms` | — | Request the list of active rooms |
+| `join` | `room`, `player_name` | Join (or create) a room with a display name |
+| `input` | `keys` | Send the set of currently pressed keys |
+| `chat` | `text` | Send a chat message (filtered server-side) |
+
+#### Server → Client
+
+| Type | Fields | Purpose |
+|---|---|---|
+| `room_list` | `rooms` | Response to `list_rooms`: array of `{name, players}` |
+| `assign` | `player`, `name`, `opponent` | Tells the client their side, name, and opponent's name |
+| `state` | ball/position fields | Current game state snapshot |
+| `win` | `winner`, scores | Game over — `winner` is `"left"` or `"right"` |
+| `chat` | `from`, `text` | A chat message from another player |
+| `chat_history` | `messages` | Replay of recent chat history on join |
+| `error` | `msg` | Server error message |
+
+### Discovery protocol
+
+- **Transport:** UDP broadcast on port 10000.
+- **Frequency:** every 3 seconds.
+- **Payload:** `{"type": "pong_announce", "port": <tcp_port>, "name": "<server_name>"}`
+- **Client:** binds to port 10000, collects announcements into a list, deduplicates by IP+port, displays in the server browser.
+
+### CPU AI
+
+Each game tick, `cpu_inputs()` evaluates:
+
+- **Ball direction** — only chase when the ball is moving toward the CPU paddle (or is very close).
+- **Distance threshold** — if the ball is within N units of the paddle center, stop moving (avoids jitter).
+- **Paddle speed** — how many pixels per tick the CPU paddle can move (Easy: 1, Medium: 2, Hard: 3).
+- **Jitter** — random chance to skip a tick, simulating human reaction delay (Easy: 30%, Medium: 10%, Hard: 2%).
+
+### Save file format
+
+Stored in `~/.pong/save.json`:
+
+```json
+{
+  "mode": "cpu",
+  "difficulty": "medium",
+  "left_score": 3,
+  "right_score": 2,
+  "left_y": 8,
+  "right_y": 12,
+  "ball_x": 42.5,
+  "ball_y": 10.0,
+  "ball_dir_x": 1,
+  "ball_dir_y": -1,
+  "width": 80,
+  "height": 24
+}
+```
+
+Only CPU games can be saved. The save is automatically deleted when a game ends or a new game starts.
+
+### Curses rendering
+
+- `stdscr.nodelay(1)` — non-blocking `getch()` for game loops (25 fps tick regardless of input).
+- `stdscr.nodelay(0)` — blocking `getch()` for menus (only redraws on key press, no flicker).
+- Colors: cyan (pair 1) for highlights, red (pair 2) for left paddle, white (pair 3) for text.
+- Diagnostics line (`_DIAG`) drawn at the bottom of every screen: OS, kernel, architecture, Python version.
 
 ## License
 
