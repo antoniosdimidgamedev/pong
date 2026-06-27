@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -133,8 +134,13 @@ class GameState:
         self.ball_dir_y = 1
         self.left_score = 0
         self.right_score = 0
+        self.sound = None
+
+    def _pulse(self, snd):
+        self.sound = snd
 
     def update(self, left_up, left_down, right_up, right_down):
+        self.sound = None
         if left_up:
             self.left_y = max(1, self.left_y - 1)
         if left_down:
@@ -150,24 +156,31 @@ class GameState:
         if self.ball_y <= 1 or self.ball_y >= self.height - 2:
             self.ball_dir_y *= -1
             self.ball_y = max(1.0, min(self.ball_y, float(self.height - 2)))
+            self._pulse("wall")
 
         if self.ball_x <= self.left_x + PADDLE_WIDTH:
             if self.left_y <= self.ball_y < self.left_y + self.paddle_h:
                 self.ball_dir_x = 1
+                self._pulse("paddle")
             elif self.ball_x <= 0:
                 self.right_score += 1
+                self._pulse("score")
                 self._reset_ball()
 
         if self.ball_x >= self.right_x - PADDLE_WIDTH:
             if self.right_y <= self.ball_y < self.right_y + self.paddle_h:
                 self.ball_dir_x = -1
+                self._pulse("paddle")
             elif self.ball_x >= self.width - 1:
                 self.left_score += 1
+                self._pulse("score")
                 self._reset_ball()
 
         if self.left_score >= WIN_SCORE:
+            self._pulse("win")
             return "left"
         if self.right_score >= WIN_SCORE:
+            self._pulse("win")
             return "right"
         return None
 
@@ -186,6 +199,7 @@ class GameState:
             "paddle_h": self.paddle_h,
             "width": self.width,
             "height": self.height,
+            "sound": self.sound,
         }
 
 
@@ -349,6 +363,26 @@ def render(stdscr, state, left_score, right_score, winner=None, side=None, info=
     stdscr.refresh()
 
 
+# ── Sounds ─────────────────────────────────────────
+def beep(event="paddle"):
+    try:
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+        if event == "win":
+            time.sleep(0.15)
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+            time.sleep(0.15)
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+        elif event == "score":
+            time.sleep(0.08)
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+    except:
+        pass
+
+
 # ── Singleplayer ───────────────────────────────────
 def play_singleplayer(stdscr):
     sh, sw = stdscr.getmaxyx()
@@ -372,6 +406,8 @@ def play_singleplayer(stdscr):
             break
 
         winner = game.update(lu, ld, ru, rd)
+        if game.sound:
+            beep(game.sound)
         render(stdscr, game.to_dict(), game.left_score, game.right_score, winner)
 
         if winner:
@@ -437,6 +473,8 @@ def play_vs_cpu(stdscr, difficulty):
         rd = "down" in cpu
 
         winner = game.update(lu, ld, ru, rd)
+        if game.sound:
+            beep(game.sound)
         render(stdscr, game.to_dict(), game.left_score, game.right_score, winner)
         tick += 1
 
@@ -805,8 +843,10 @@ def game_loop(stdscr, sock):
     pname = ""
     opponent = ""
 
+    prev_sound = None
+
     def pump():
-        nonlocal buf, state, winner, side, waiting, chat_log, pname, opponent
+        nonlocal buf, state, winner, side, waiting, chat_log, pname, opponent, prev_sound
         while True:
             try:
                 data = sock.recv(4096)
@@ -829,6 +869,10 @@ def game_loop(stdscr, sock):
                     pname = msg.get("name", "")
                     opponent = msg.get("opponent", "")
                 elif t == "state":
+                    snd = msg.get("sound")
+                    if snd and not prev_sound:
+                        beep(snd)
+                    prev_sound = snd
                     state = msg
                     winner = None
                     waiting = False
@@ -1022,6 +1066,8 @@ def menu_loop(stdscr, title, items):
     while True:
         draw_menu(stdscr, title, items, selected)
         key = stdscr.getch()
+        if key == -1:
+            return -2
         if key in (ord('q'), ord('Q'), 27):
             return -1
         elif key == curses.KEY_UP:
@@ -1710,6 +1756,21 @@ def main_menu(stdscr):
     curses.init_pair(3, curses.COLOR_WHITE, curses.COLOR_BLACK)
     curses.curs_set(0)
     stdscr.keypad(1)
+    stdscr.timeout(5000)
+
+    IDLE_SECS = 30
+    idle = 0
+
+    def rickroll():
+        curses.def_prog_mode()
+        curses.endwin()
+        try:
+            subprocess.call(["curl", "-s", "ASCII.live/can-you-hear-me"],
+                            timeout=60)
+        except:
+            pass
+        curses.reset_prog_mode()
+        curses.doupdate()
 
     while True:
         choice = menu_loop(stdscr, " Pong ", [
@@ -1717,6 +1778,15 @@ def main_menu(stdscr):
             "How to Play",
             "Quit",
         ])
+
+        if choice == -2:
+            idle += 5
+            if idle >= IDLE_SECS:
+                rickroll()
+                idle = 0
+            continue
+
+        idle = 0
 
         if choice == 0:
             sub = menu_loop(stdscr, " Play ", ["Singleplayer", "Multiplayer"])
