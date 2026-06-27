@@ -1712,14 +1712,6 @@ def main_menu(stdscr):
     stdscr.keypad(1)
 
     while True:
-        play_items = []
-        if has_save():
-            play_items.append(["Continue Saved Game", "CPU"])
-        play_items.extend([
-            ["Player vs CPU", "Easy / Medium / Hard"],
-            ["Player vs Player", "local 2-player"],
-            "Multiplayer",
-        ])
         choice = menu_loop(stdscr, " Pong ", [
             ["Play", "Singleplayer"],
             "How to Play",
@@ -1727,25 +1719,31 @@ def main_menu(stdscr):
         ])
 
         if choice == 0:
-            sub = menu_loop(stdscr, " Play ", play_items)
-            if sub is None or sub == -1:
-                continue
-            if has_save() and sub == 0:
-                saved = load_game()
-                diff = saved.get("difficulty", "medium") if saved else "medium"
-                play_vs_cpu(stdscr, diff)
-            else:
-                offset = 1 if has_save() else 0
-                if isinstance(play_items[sub], list) and play_items[sub][0] == "Player vs CPU":
-                    diff = menu_loop(stdscr, " CPU Difficulty ",
-                                     ["Easy", "Medium", "Hard"])
-                    if diff >= 0:
-                        play_vs_cpu(stdscr, ["easy", "medium", "hard"][diff])
-                elif isinstance(play_items[sub], list) and play_items[sub][0] == "Player vs Player":
-                    play_singleplayer(stdscr)
-                elif play_items[sub] == "Multiplayer":
-                    if multiplayer_submenu(stdscr):
-                        return
+            sub = menu_loop(stdscr, " Play ", ["Singleplayer", "Multiplayer"])
+            if sub == 0:
+                sp_items = ["New Game"]
+                if has_save():
+                    sp_items.append(["Load Game", "continue saved"])
+                sp = menu_loop(stdscr, " Singleplayer ", sp_items)
+                if sp == 0:
+                    ng = menu_loop(stdscr, " New Game ", [
+                        ["Player vs CPU", "Easy / Medium / Hard"],
+                        ["Player vs Player", "local 2-player"],
+                    ])
+                    if ng == 0:
+                        diff = menu_loop(stdscr, " CPU Difficulty ",
+                                         ["Easy", "Medium", "Hard"])
+                        if diff >= 0:
+                            play_vs_cpu(stdscr, ["easy", "medium", "hard"][diff])
+                    elif ng == 1:
+                        play_singleplayer(stdscr)
+                elif sp == 1 and has_save():
+                    saved = load_game()
+                    diff = saved.get("difficulty", "medium") if saved else "medium"
+                    play_vs_cpu(stdscr, diff)
+            elif sub == 1:
+                if multiplayer_submenu(stdscr):
+                    return
 
         elif choice == 1:
             show_how_to_play(stdscr)

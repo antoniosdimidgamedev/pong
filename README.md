@@ -5,7 +5,7 @@ Classic Pong for the terminal. Player vs CPU with three difficulty levels, local
 ## Features
 
 - **Player vs CPU** — three difficulty levels (Easy, Medium, Hard) with adaptive AI that tracks the ball, reacts with human-like delay, and has configurable paddle speed and accuracy
-- **Save / Load** — press `S` during a CPU game to save your progress to `~/.pong/save.json`; resume later from the main menu via **Continue Saved Game**
+- **Save / Load** — press `S` during a CPU game to save your progress to `~/.pong/save.json`; resume later from **Play > Singleplayer > Load Game**
 - **Local two-player** — two players share one keyboard (W/S vs arrow keys)
 - **LAN multiplayer** — built-in TCP server with automatic IP detection, UDP broadcast discovery, and a server browser
 - **Room templates** — pick from 10 preset room names (Classic, Rally, Speed, Tournament, Practice, Sudden Death, Challenge, Arena, Grand Slam, Showdown) or create a new one
@@ -42,14 +42,12 @@ pong
 ### Menu
 
 ```
- Pong                         Play
-  > Play                 >     Continue Saved Game   (if save exists)
-    How to Play                Player vs CPU >
-    Quit                          Easy / Medium / Hard
-                               Player vs Player
-                               Multiplayer >
-                                 Host Server
-                                 Join Server
+ Pong                         Play                              Singleplayer
+  > Play                 >     Singleplayer >              >      New Game >
+    How to Play                Multiplayer >                      Load Game      (if save exists)
+    Quit                                                          Player vs CPU >
+                                                                   Easy / Medium / Hard
+                                                                  Player vs Player
 ```
 
 Use arrow keys to navigate, Enter to select, Q or Esc to go back.
@@ -74,7 +72,7 @@ Press `/` to enter chat mode. The prompt appears at the bottom of the screen. Ty
 
 ### Save / Load (CPU only)
 
-Press `S` during a CPU game to save your progress. The current score, paddle positions, ball state, and difficulty are written to `~/.pong/save.json`. On the next launch, **Continue Saved Game** appears at the top of the Play menu. The save is erased automatically when the game ends (someone wins) or can be discarded by starting a fresh game.
+Press `S` during a CPU game to save your progress. The current score, paddle positions, ball state, and difficulty are written to `~/.pong/save.json`. On the next launch, select **Play > Singleplayer > Load Game** to resume. The save is erased automatically when the game ends (someone wins) or can be discarded by starting a fresh game.
 
 ## Player vs CPU
 
