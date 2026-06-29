@@ -42,6 +42,17 @@ ROOM_TEMPLATES = [
 FILTERED_WORDS = [
     "fuck", "shit", "ass", "bitch", "damn", "cunt", "dick", "piss",
     "bastard", "cock", "nigger", "faggot", "slut", "whore",
+    "arse", "balls", "bollocks", "boner", "bullshit",
+    "chink", "clit", "coon", "crap", "cum",
+    "dickhead", "dildo", "douche", "dyke",
+    "fag", "fanny", "goddamn", "hell",
+    "jackass", "jerk", "jizz", "kike",
+    "motherfucker", "nigga", "pussy",
+    "queer", "retard", "scrotum",
+    "skank", "spic", "tits", "turd",
+    "twat", "vagina", "wanker",
+    "anal", "asshole", "blowjob",
+    "porn", "sex", "suck",
 ]
 
 def _filter_chat(text):
