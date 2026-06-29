@@ -229,7 +229,7 @@ python3 pong.py
 
 ## Integrity verification
 
-The game automatically checks its own SHA256 hash against `SHA256SUMS` at startup. If the file has been tampered with or corrupted, the game refuses to run:
+The game automatically verifies its own SHA256 hash against `SHA256SUMS` every time it starts. If the file has been tampered with or corrupted, the game refuses to run:
 
 ```
 $ python3 pong.py
@@ -240,11 +240,10 @@ The file has been modified or corrupted. Refusing to run.
 Re-download from: https://github.com/antoniosdimidgamedev/pong
 ```
 
-You can also run the check manually:
+You can also verify manually with:
 
 ```bash
-python3 pong.py --verify
-sha256sum -c SHA256SUMS    # alternative using system tools
+sha256sum -c SHA256SUMS
 ```
 
 ## Setup script
