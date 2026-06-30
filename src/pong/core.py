@@ -252,7 +252,7 @@ def cpu_inputs(game, difficulty, tick):
     center = game.right_y + game.paddle_h / 2
     diff = target - center
     configs = {
-        "easy": {"thresh": 3.0, "speed": 1, "jitter": 0.3},
+        "easy": {"thresh": 2.0, "speed": 1, "jitter": 0.15},
         "medium": {"thresh": 1.5, "speed": 2, "jitter": 0.1},
         "hard": {"thresh": 0.5, "speed": 3, "jitter": 0.02},
     }
